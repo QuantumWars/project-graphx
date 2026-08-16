@@ -1,0 +1,5 @@
+[
+  { "repo": "my-plugin", "root": "my-plugin/agents", "kind": "agent" },
+  { "repo": "my-plugin", "root": "my-plugin/skills", "kind": "skill" },
+  { "repo": "another-repo", "root": "another-repo/.agents/skills", "kind": "skill" }
+]

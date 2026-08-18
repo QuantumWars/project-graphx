@@ -9,13 +9,14 @@
   "plugins": [
     {
       "name": "skill-graph",
-      "description": "Catalogue the skills and agents you have, count what references what, scan your projects for what is really installed, and query it all from a session. Optional desktop graph explorer.",
+      "description": "Catalogue the skills and agents you have, count what references what, scan your projects for what is really installed, and query it all from a session. Includes a browser graph viewer that needs no install.",
       "author": {
         "name": "subha"
       },
       "source": "./",
       "category": "productivity",
-      "version": "0.1.0"
+      "version": "0.1.0",
+      "homepage": "https://github.com/QuantumWars/project-graphx"
     }
   ]
 }

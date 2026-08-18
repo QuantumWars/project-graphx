@@ -40,4 +40,39 @@ Each source becomes one entry:
 
 Write to `.claude/graph/config.json`, creating the directory. If a config already exists, show the user the difference and confirm before overwriting.
 
-Then tell them to run `/skill-graph:build`. Do not run it yourself — the user should see the config first.
+## 4. Show it, then offer to build
+
+Show the config you wrote, then **ask whether to build now** and run it if they agree. Do not
+simply end with an instruction to go and run `/skill-graph:build` — a config with no graph behind
+it does nothing, and the user has no way to judge whether the sources were right until they see
+what comes out of them.
+
+Ask, rather than building unprompted, because the build reads every file under the configured
+sources and walks every scan root. On a large tree with `scanRoots` set that is slow enough that
+it should be a choice.
+
+On yes, run the same two commands `/skill-graph:build` runs, and report the counts they print.
+On no, say the one command to run later and stop.
+
+## Do not also import the sources
+
+`add_repo` is for repositories that are **not** configured sources. Never call it on a directory
+already listed in `sources`.
+
+Both paths reach the same files by different routes — the build writes them into `graph-data.json`,
+`add_repo` stores them in `overlay.json`, and the two are merged at read time with no deduplication.
+The result is every affected item appearing twice, and `get_node` then failing this way:
+
+```json
+{ "error": "ambiguous", "candidates": ["image-generation", "image-generation"] }
+```
+
+That error exists so the user can choose between candidates, but here both print the same string, so
+there is no answer that resolves it. Every by-name lookup of a duplicated item becomes unanswerable.
+
+`remove_repo("<label>")` undoes it completely if it has already happened.
+
+Prefer the source path whenever both are possible. `add_repo` reads frontmatter only and its nodes
+start with **zero** edges by design; the build scans body text and computes real cross-references
+weighted by how often each name actually appears. Importing a source therefore costs you the edges
+and gains nothing.

@@ -243,7 +243,7 @@ server.registerTool(
     description:
       "Copies a catalogued skill or agent's REAL files into a scanned project's own .claude/ folder (agents/<name>.md, or skills/<name>/ for a whole skill directory). A genuine filesystem write to the destination project only — the catalogued source tree is read-only and never modified. After copying, automatically re-scans so usedBy/usesCount reflect the install immediately. Fails cleanly (no partial write) if already installed there.",
     inputSchema: {
-      name: z.string().describe("skill or agent name"),
+      name: z.string().describe(NODE_REF),
       project: z.string().describe("project label, e.g. 'context-management' or a substring — must match one of the scanned real projects"),
     },
   },
@@ -260,7 +260,7 @@ server.registerTool(
     description:
       "Deletes a skill/agent's real files from a project's own .claude/ folder — a genuine, irreversible filesystem delete (recursive for a skill directory). Only ever touches the target project, never the catalogued source tree. Re-scans automatically afterward so the graph reflects the removal immediately. Fails cleanly if it isn't actually installed there.",
     inputSchema: {
-      name: z.string().describe("skill or agent name"),
+      name: z.string().describe(NODE_REF),
       project: z.string().describe("project label — must match one of the scanned real projects"),
     },
   },

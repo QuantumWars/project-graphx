@@ -47,6 +47,19 @@ abandoned experiments as readily as the real thing.
 Watch for the same skill existing in more than one root. That is legitimate and still imports, but
 it makes by-name lookups ambiguous, and the answer comes back as ids. Say which names collide.
 
+**Say what this costs the usage numbers, before building.** A project is never counted as a user of
+its own catalogue — otherwise a repo cataloguing its own `.claude/skills` would report itself as a
+user of every skill in it, and every number would be inflated by one. That rule is right per-project.
+Machine-wide it bites: most source roots you find here *are* directories inside projects that the
+scan also walks, so for most items the only copy on disk is the excluded one, and `usedBy` comes back
+empty. On this machine the first global build catalogued 572 nodes from 15 sources and scanned 41
+projects, and 5 items had a recorded user.
+
+That is the rule working, not a fault, and `projects_using` is honest when it says nothing — absent
+means "no copy found outside its own catalogue", never "unused". But someone who went global
+expecting a machine-wide picture of what is installed where will read those empty answers as a
+broken build. Tell them the number will be small and why, rather than letting them find it.
+
 ## 3. Write the config
 
 ```json

@@ -4,9 +4,9 @@
 [![Latest release](https://img.shields.io/github/v/release/QuantumWars/project-graphx?label=release)](https://github.com/QuantumWars/project-graphx/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-macOS%20(arm64)-lightgrey.svg)](https://github.com/QuantumWars/project-graphx/releases/latest)
 
-A Neo4j-Browser-style desktop app for exploring your own Claude Code agents and
-skills as a graph — plus an MCP server so Claude Code itself can query, tag,
-install, and reorganize that catalog directly.
+A local knowledge graph for your `.claude/` agents and skills: a desktop app
+for exploring it visually, and an MCP server so Claude Code itself can query,
+tag, install, and reorganize the catalog directly.
 
 Point it at any repo (or several) that follow the `.claude/agents` /
 `.claude/skills` convention, and it builds a real graph: which agents/skills
@@ -30,7 +30,7 @@ task" and get back real, resolved file paths instead of a guess.
 
 ## Features
 
-**Desktop app** (Electron, styled after the Neo4j Browser)
+**Desktop app** (Electron)
 - Force-directed graph of every agent/skill, sized by how often it's
   referenced elsewhere and colored by category
 - A query bar for real commands: `best`, `neighbors <name>`, `open <name>`,

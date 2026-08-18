@@ -2,7 +2,7 @@
   "name": "project-graphx",
   "productName": "project-graphx",
   "version": "1.0.0",
-  "description": "A Neo4j-Browser-style graph explorer for your Claude Code agents and skills",
+  "description": "A local knowledge graph explorer for your Claude Code agents and skills",
   "main": "src/main.js",
   "private": true,
   "scripts": {

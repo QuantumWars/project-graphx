@@ -19,7 +19,7 @@ const repoImporter = require("./repo-importer.js");
 // kind added to claude-infra.json is filterable the same day it is catalogued.
 const INFRA_KINDS = require("./infra-types.js").kinds();
 
-const server = new McpServer({ name: "skill-graph", version: "0.1.1" });
+const server = new McpServer({ name: "skill-graph", version: "0.1.2" });
 
 function ok(obj) {
   return { content: [{ type: "text", text: JSON.stringify(obj, null, 2) }] };

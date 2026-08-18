@@ -1,0 +1,17 @@
+{
+  "description": "A reminder, not a gate. At session start it reports any .claude infrastructure in this repo that the global catalogue does not know about, or knows but has not rebuilt since it changed. It emits a message and never returns a permission decision. Silent when there is nothing to say, and silent when there is no global catalogue at all.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/unpushed-reminder.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

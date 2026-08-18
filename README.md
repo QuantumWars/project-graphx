@@ -48,6 +48,7 @@ instead, at the cost of a one-time ~280 MB Electron install.
 | `install_skill` / `uninstall_skill` | Python 3.6+ | For the usage re-scan. Located by probing `python3`, then `python`, then `py -3`. |
 | `/skill-graph:build` | `python3` 3.6+ | Standard library only, but the command names `python3` literally. On macOS it comes with the Xcode command line tools. |
 | `/skill-graph:view` | nothing more | Same `node` as above. |
+| `/skill-graph:push` | Python 3.6+ | Registers this repo with the global catalogue. Needs `GRAPH_DATA_DIR` set. |
 | `add_repo` | `git` | Only for importing an external repo's skills. |
 | `/skill-graph:app` | `npm` + ~280 MB | One-time Electron install, on first launch only. Optional. |
 | Running the tests | `bun` | Contributors only. |

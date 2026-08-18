@@ -34636,14 +34636,21 @@ var require_graph_query = __commonJS((exports, module) => {
     const q = text.trim().toLowerCase();
     if (!q)
       return { notFound: true };
+    const byExactId = g.byId.get(text.trim());
+    if (byExactId)
+      return { node: byExactId };
     const exact = g.data.nodes.filter((n) => n.name.toLowerCase() === q);
     if (exact.length === 1)
       return { node: exact[0] };
     const sub = g.data.nodes.filter((n) => n.name.toLowerCase().includes(q));
     if (sub.length === 1)
       return { node: sub[0] };
-    if (sub.length > 1)
-      return { ambiguous: sub.slice(0, 8).map((n) => n.name) };
+    if (sub.length > 1) {
+      const picked = sub.slice(0, 8);
+      const seen = picked.map((n) => n.name);
+      const repeated = new Set(seen.filter((n, i) => seen.indexOf(n) !== i));
+      return { ambiguous: picked.map((n) => repeated.has(n.name) ? n.id : n.name) };
+    }
     return { notFound: true };
   }
   function bfsPath(g, startId, endId) {
@@ -35166,6 +35173,27 @@ var require_repo_importer = __commonJS((exports, module) => {
     }
     return nodes;
   }
+  function builtFileUnder(repoPath) {
+    const dataPath = paths.dataPath();
+    if (!fs.existsSync(dataPath))
+      return null;
+    let data;
+    try {
+      data = JSON.parse(fs.readFileSync(dataPath, "utf-8"));
+    } catch {
+      return null;
+    }
+    const target = path.resolve(repoPath);
+    const under = (p) => p === target || p.startsWith(target + path.sep);
+    for (const n of data.nodes || []) {
+      if (!n.path || n.type === "project")
+        continue;
+      const abs = path.isAbsolute(n.path) ? n.path : path.resolve(data.sourceRoot || "", n.path);
+      if (under(abs))
+        return { name: n.name, path: abs };
+    }
+    return null;
+  }
   function addRepo(source) {
     const located = cloneOrLocate(source);
     if (located.error)
@@ -35175,6 +35203,16 @@ var require_repo_importer = __commonJS((exports, module) => {
       if (!located.isLocal)
         fs.rmSync(located.repoPath, { recursive: true, force: true });
       return { error: `no .claude/skills or .claude/agents found in ${located.repoPath}` };
+    }
+    const clash = builtFileUnder(located.repoPath);
+    if (clash) {
+      if (!located.isLocal)
+        fs.rmSync(located.repoPath, { recursive: true, force: true });
+      return {
+        error: `${located.repoPath} is already catalogued by the build — ${clash.path} is in the graph already. ` + `Importing it would add a second copy of every item under it, and because both copies carry the same name, ` + `every by-name lookup of them would answer "ambiguous" with two identical choices. Nothing was imported.`,
+        alreadyCatalogued: clash,
+        fix: "Run /skill-graph:build to refresh what is already configured. add_repo is for repositories that are not configured sources — and unlike the build it reads frontmatter only, so its nodes carry no cross-reference edges."
+      };
     }
     const repoResult = overlay.addImportedRepo({ label: located.label, source, repoPath: located.repoPath, isLocal: located.isLocal, nodeCount: nodes.length });
     if (repoResult.error)

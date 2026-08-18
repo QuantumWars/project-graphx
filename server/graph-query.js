@@ -53,11 +53,28 @@ function loadGraph() {
 function resolveNode(g, text) {
   const q = text.trim().toLowerCase();
   if (!q) return { notFound: true };
+
+  // An id is tried first because it is the only identifier guaranteed unique,
+  // and it is what the ambiguity branch below hands back. Without this, the
+  // candidates offered to break a tie could not themselves be looked up, and
+  // the tie would have no answer.
+  const byExactId = g.byId.get(text.trim());
+  if (byExactId) return { node: byExactId };
+
   const exact = g.data.nodes.filter((n) => n.name.toLowerCase() === q);
   if (exact.length === 1) return { node: exact[0] };
   const sub = g.data.nodes.filter((n) => n.name.toLowerCase().includes(q));
   if (sub.length === 1) return { node: sub[0] };
-  if (sub.length > 1) return { ambiguous: sub.slice(0, 8).map((n) => n.name) };
+  if (sub.length > 1) {
+    // Two repos may legitimately hold a skill of the same name, so a candidate
+    // list of bare names can contain the same string twice — asking the user to
+    // choose between two identical options. Any name that is not unique within
+    // the list is reported as its id instead, which is.
+    const picked = sub.slice(0, 8);
+    const seen = picked.map((n) => n.name);
+    const repeated = new Set(seen.filter((n, i) => seen.indexOf(n) !== i));
+    return { ambiguous: picked.map((n) => (repeated.has(n.name) ? n.id : n.name)) };
+  }
   return { notFound: true };
 }
 

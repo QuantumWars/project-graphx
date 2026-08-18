@@ -149,6 +149,58 @@ function scanRepo(repoPath, label) {
   return nodes;
 }
 
+// Importing a directory the build already catalogues produces two nodes for
+// every item under it — graph-data.json holds one, overlay.json the other, and
+// applyOverlay concatenates them without deduplicating. Their ids differ (the
+// imported one is namespaced `import:`), so nothing detects the clash, but
+// their NAMES are identical, and names are what every lookup resolves by. The
+// result is worse than a duplicate: get_node answers
+// {"error":"ambiguous","candidates":["x","x"]}, and there is no answer the user
+// can give that resolves it.
+//
+// Refusing here rather than merging is deliberate. A merge would have to guess
+// which copy wins, and they are not equivalent — the built node carries real
+// cross-reference edges computed from file bodies, the imported one has none by
+// design. Silently keeping the wrong one would cost edges no error would ever
+// mention.
+// Ids cannot detect this: imported nodes are namespaced `import:`, so they never
+// collide with built ones. The collision is on NAME, which is what every lookup
+// resolves by — and name alone is the wrong test, because two genuinely
+// different repos may each hold a `code-reviewer` and that import is legitimate.
+//
+// The real condition is that the same files are being read twice. So the check
+// is on paths: refuse when the directory being imported overlaps a configured
+// source, in either direction.
+// Deliberately not derived from config.json. The config states source roots as
+// paths relative to the project, and resolving those requires projectRoot(),
+// which falls back to the current working directory — and an MCP server's cwd
+// is not reliably the project. A wrong root there makes this guard quietly
+// answer "no overlap" and stop guarding, which is the failure mode that
+// matters least visibly and most.
+//
+// graph-data.json already records where every catalogued file actually is, as
+// written by the build itself. Asking whether any of those files sits inside
+// the directory being imported answers the real question — are these the same
+// files? — without a second, weaker copy of the resolution logic.
+function builtFileUnder(repoPath) {
+  const dataPath = paths.dataPath();
+  if (!fs.existsSync(dataPath)) return null; // nothing built yet, nothing to duplicate
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(dataPath, "utf-8"));
+  } catch {
+    return null; // a corrupt graph is the build's problem to report, not this one's
+  }
+  const target = path.resolve(repoPath);
+  const under = (p) => p === target || p.startsWith(target + path.sep);
+  for (const n of data.nodes || []) {
+    if (!n.path || n.type === "project") continue;
+    const abs = path.isAbsolute(n.path) ? n.path : path.resolve(data.sourceRoot || "", n.path);
+    if (under(abs)) return { name: n.name, path: abs };
+  }
+  return null;
+}
+
 function addRepo(source) {
   const located = cloneOrLocate(source);
   if (located.error) return { error: located.error };
@@ -156,6 +208,19 @@ function addRepo(source) {
   if (!nodes.length) {
     if (!located.isLocal) fs.rmSync(located.repoPath, { recursive: true, force: true }); // don't keep a useless clone around
     return { error: `no .claude/skills or .claude/agents found in ${located.repoPath}` };
+  }
+
+  const clash = builtFileUnder(located.repoPath);
+  if (clash) {
+    if (!located.isLocal) fs.rmSync(located.repoPath, { recursive: true, force: true });
+    return {
+      error:
+        `${located.repoPath} is already catalogued by the build — ${clash.path} is in the graph already. ` +
+        `Importing it would add a second copy of every item under it, and because both copies carry the same name, ` +
+        `every by-name lookup of them would answer "ambiguous" with two identical choices. Nothing was imported.`,
+      alreadyCatalogued: clash,
+      fix: "Run /skill-graph:build to refresh what is already configured. add_repo is for repositories that are not configured sources — and unlike the build it reads frontmatter only, so its nodes carry no cross-reference edges.",
+    };
   }
   const repoResult = overlay.addImportedRepo({ label: located.label, source, repoPath: located.repoPath, isLocal: located.isLocal, nodeCount: nodes.length });
   if (repoResult.error) return repoResult;

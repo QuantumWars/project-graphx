@@ -35309,7 +35309,7 @@ var require_server3 = __commonJS(() => {
   var overlay = require_graph_overlay();
   var installer = require_skill_installer();
   var repoImporter = require_repo_importer();
-  var server = new McpServer({ name: "skill-graph", version: "0.1.0" });
+  var server = new McpServer({ name: "skill-graph", version: "0.1.1" });
   function ok(obj) {
     return { content: [{ type: "text", text: JSON.stringify(obj, null, 2) }] };
   }

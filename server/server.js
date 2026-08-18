@@ -15,7 +15,7 @@ const overlay = require("./graph-overlay.js");
 const installer = require("./skill-installer.js");
 const repoImporter = require("./repo-importer.js");
 
-const server = new McpServer({ name: "skill-graph", version: "0.1.0" });
+const server = new McpServer({ name: "skill-graph", version: "0.1.1" });
 
 function ok(obj) {
   return { content: [{ type: "text", text: JSON.stringify(obj, null, 2) }] };

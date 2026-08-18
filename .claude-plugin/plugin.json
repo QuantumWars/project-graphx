@@ -1,7 +1,7 @@
 {
   "name": "skill-graph",
   "displayName": "Skill Graph",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Your Claude Code skills and agents as a queryable graph. Catalogues the ones you have, counts which files actually reference which, scans your projects for what is really installed, and answers questions about all of it from a session — with a browser viewer that needs no install, and an optional desktop app.",
   "author": {
     "name": "subha"

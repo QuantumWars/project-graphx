@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# generated graph data — regenerate locally with `npm run regenerate-data`
+neo4j-graph-app/data/*.json
+!neo4j-graph-app/data/.gitkeep
+
+# your own machine-specific source config — copy from sources.example.json
+sources.json
+
+# build output
+neo4j-graph-app/dist/
+neo4j-graph-app/build/
+
+# repos cloned in by the add_repo MCP tool
+imported-repos/
+
+# python
+__pycache__/
+*.pyc
+
+# os
+.DS_Store

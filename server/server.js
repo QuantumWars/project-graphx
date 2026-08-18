@@ -21,6 +21,13 @@ function ok(obj) {
   return { content: [{ type: "text", text: JSON.stringify(obj, null, 2) }] };
 }
 
+// Every tool that names a node resolves it the same way, so they describe the
+// argument the same way. The id clause is the load-bearing part: when a name is
+// ambiguous these tools answer with candidate ids, and a caller reading only
+// this description would have no way to know the string it was just handed is
+// a legal input — leaving the ambiguity it was given to resolve unresolvable.
+const NODE_REF = "exact or partial name, or an id returned in the candidates of an ambiguous result";
+
 server.registerTool(
   "best_skills",
   {
@@ -42,7 +49,7 @@ server.registerTool(
     title: "Get skill/agent/project detail",
     description:
       "Full detail for one node by name (an agent, a skill, or one of the scanned projects): description, tools, real file path, what it references, what references it, and — for a project — exactly which catalogued items it has installed on disk.",
-    inputSchema: { name: z.string().describe("exact or partial name") },
+    inputSchema: { name: z.string().describe(NODE_REF) },
   },
   async ({ name }) => ok(q.getNodeDetail(q.loadGraph(), name))
 );
@@ -63,7 +70,7 @@ server.registerTool(
     title: "Neighbors of a node",
     description:
       "What a given agent/skill actually connects to via real name-references in the source text, sorted strongest first (weight = how many times it's actually mentioned).",
-    inputSchema: { name: z.string() },
+    inputSchema: { name: z.string().describe(NODE_REF) },
   },
   async ({ name }) => ok(q.neighbors(q.loadGraph(), name))
 );
@@ -73,7 +80,7 @@ server.registerTool(
   {
     title: "Shortest path between two nodes",
     description: "Real breadth-first search over the actual reference graph — how (and whether) two agents/skills are connected, and through what.",
-    inputSchema: { a: z.string(), b: z.string() },
+    inputSchema: { a: z.string().describe(NODE_REF), b: z.string().describe(NODE_REF) },
   },
   async ({ a, b }) => ok(q.findPath(q.loadGraph(), a, b))
 );
@@ -84,7 +91,7 @@ server.registerTool(
     title: "Which real projects use this skill/agent",
     description:
       "Backed by an actual filesystem scan of every .claude/agents and .claude/skills folder under the configured scan roots — not a manifest that can drift. Returns which of your projects currently have this installed.",
-    inputSchema: { name: z.string() },
+    inputSchema: { name: z.string().describe(NODE_REF) },
   },
   async ({ name }) => ok(q.projectsUsing(q.loadGraph(), name))
 );
@@ -120,7 +127,7 @@ server.registerTool(
     description:
       "Not a text search — a graph algorithm (Jaccard similarity over real reference neighbors). Finds what else tends to get referenced alongside the same things as a given skill/agent, the same technique behind 'people who bought X also bought Y'. Two nodes with completely different names/descriptions can still turn up here if the real source text consistently cites them near the same third parties.",
     inputSchema: {
-      name: z.string(),
+      name: z.string().describe(NODE_REF),
       n: z.number().int().min(1).max(50).optional().describe("how many to return, default 10"),
     },
   },
@@ -133,7 +140,7 @@ server.registerTool(
     title: "Add a note to a node",
     description:
       "Attach a persistent text note to any agent/skill/project/CLAUDE.md node — a real write, not a suggestion. Stored in .claude/graph/overlay.json, NOT in graph-data.json itself, specifically so it survives the next /skill-graph:build re-scan instead of being silently overwritten. Shows up in get_node's `notes` field and in the desktop app's detail panel on next load.",
-    inputSchema: { name: z.string().describe("node name to attach the note to"), text: z.string() },
+    inputSchema: { name: z.string().describe(NODE_REF), text: z.string() },
   },
   async ({ name, text }) => {
     const g = q.loadGraph();
@@ -149,7 +156,7 @@ server.registerTool(
   {
     title: "Remove a note from a node",
     description: "Removes one note by its index (0-based) in that node's notes array, as returned by get_node.",
-    inputSchema: { name: z.string(), index: z.number().int().min(0) },
+    inputSchema: { name: z.string().describe(NODE_REF), index: z.number().int().min(0) },
   },
   async ({ name, index }) => {
     const g = q.loadGraph();
@@ -167,7 +174,7 @@ server.registerTool(
     description:
       "Link two existing nodes with a relationship the automated text-scan didn't catch (e.g. 'these two skills work well together in practice'). Stored in the same durable overlay as notes — survives regeneration. The edge is real: it participates in graph_path, graph_neighbors, related_by_connections and best_skills' degree count, and renders in the desktop app as a distinct line.",
     inputSchema: {
-      from: z.string().describe("source node name"),
+      from: z.string().describe(`source node — ${NODE_REF}`),
       to: z.string().describe("target node name"),
       label: z.string().optional().describe("short relationship label, default 'related'"),
       weight: z.number().optional().describe("relationship strength, default 1 — higher pulls the two nodes closer together visually"),
@@ -199,7 +206,7 @@ server.registerTool(
     description:
       "Give a node a 1-5 star rating with an optional note (e.g. 'worked great for X', 'too verbose, avoid'). Ratings accumulate — rating the same thing again adds a new entry rather than overwriting, and get_node returns the running average plus full history. Stored in the same durable overlay as notes/custom edges. Feeds into search_ranked as a tiebreaker, so well-rated things surface first.",
     inputSchema: {
-      name: z.string(),
+      name: z.string().describe(NODE_REF),
       rating: z.number().int().min(1).max(5),
       note: z.string().optional(),
     },
@@ -218,7 +225,7 @@ server.registerTool(
   {
     title: "Remove a rating",
     description: "Removes one rating by its index (0-based) in that node's ratings array, as returned by get_node.",
-    inputSchema: { name: z.string(), index: z.number().int().min(0) },
+    inputSchema: { name: z.string().describe(NODE_REF), index: z.number().int().min(0) },
   },
   async ({ name, index }) => {
     const g = q.loadGraph();
@@ -315,7 +322,7 @@ server.registerTool(
     title: "Set a node's real category",
     description:
       "Overrides the category build-graph.py's keyword heuristic assigned (or that an import guessed) — that heuristic is crude: it matches the FIRST keyword hit in a fixed priority list, so a website-cloning skill whose description happens to mention 'CSS' gets stamped 'frontend' even though its actual purpose is cloning, not frontend work. Use this to set the category to whatever the skill's real use case is, based on actually reading its description/purpose. Call list_categories first to reuse an existing bucket when one genuinely fits — only introduce a new category name when nothing does. Survives regeneration; wins over the heuristic every time the graph loads.",
-    inputSchema: { name: z.string(), category: z.string() },
+    inputSchema: { name: z.string().describe(NODE_REF), category: z.string() },
   },
   async ({ name, category }) => {
     const g = q.loadGraph();
@@ -331,7 +338,7 @@ server.registerTool(
   {
     title: "Revert a node to its heuristic-assigned category",
     description: "Removes a set_category override, reverting the node to whatever build-graph.py's keyword heuristic (or the import-time guess) assigns it.",
-    inputSchema: { name: z.string() },
+    inputSchema: { name: z.string().describe(NODE_REF) },
   },
   async ({ name }) => {
     const g = q.loadGraph();
@@ -348,7 +355,7 @@ server.registerTool(
     title: "Tag a node with as many labels as actually apply",
     description:
       "Category is one bucket per node — too coarse to reliably find 'the correct set of files' for a specific need. Tags are additive: a skill can be 'react' AND 'security' AND 'testing' at once. Add whichever tags genuinely describe it, based on reading its real purpose. Feeds get_file_set's filtering. Call list_tags first to reuse existing labels where one fits, rather than fragmenting into near-duplicates.",
-    inputSchema: { name: z.string(), tags: z.array(z.string()).min(1) },
+    inputSchema: { name: z.string().describe(NODE_REF), tags: z.array(z.string()).min(1) },
   },
   async ({ name, tags }) => {
     const g = q.loadGraph();
@@ -364,7 +371,7 @@ server.registerTool(
   {
     title: "Remove tags from a node",
     description: "Removes the given tags from a node, leaving any others in place.",
-    inputSchema: { name: z.string(), tags: z.array(z.string()).min(1) },
+    inputSchema: { name: z.string().describe(NODE_REF), tags: z.array(z.string()).min(1) },
   },
   async ({ name, tags }) => {
     const g = q.loadGraph();
@@ -407,7 +414,7 @@ server.registerTool(
   {
     title: "Reveal the real file in Finder",
     description: "Opens Finder to the actual source file (or, for a project, the actual project folder) on disk. A real OS-level action, not a copied path.",
-    inputSchema: { name: z.string() },
+    inputSchema: { name: z.string().describe(NODE_REF) },
   },
   async ({ name }) => {
     const g = q.loadGraph();

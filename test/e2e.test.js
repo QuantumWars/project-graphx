@@ -159,6 +159,19 @@ test("the shipped bundle exposes its tools", async () => {
   }
 });
 
+// When a name is ambiguous these tools answer with candidate ids. A caller that
+// reads only the schema has no other way to learn that an id is a legal input,
+// so the ambiguity it was handed would have no resolution it could reach.
+test("tools that take a node name advertise that an id is accepted", async () => {
+  const { result } = await rpc("tools/list", {});
+  const byName = Object.fromEntries(result.tools.map((t) => [t.name, t]));
+  for (const tool of ["get_node", "graph_neighbors", "projects_using", "add_note", "rate_skill"]) {
+    const desc = byName[tool].inputSchema.properties.name.description || "";
+    expect(desc).toContain("id");
+  }
+  expect(byName.graph_path.inputSchema.properties.a.description).toContain("id");
+});
+
 test("find_skills returns a fixture node through the real server", async () => {
   const out = unwrap(await rpc("tools/call", { name: "find_skills", arguments: { text: "threat" } }));
   const hits = JSON.stringify(out);

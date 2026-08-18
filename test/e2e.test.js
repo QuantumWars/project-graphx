@@ -20,8 +20,17 @@ let workspace, project, graphDir, server, rpc;
 
 // --- a minimal MCP stdio client -------------------------------------------
 // Framed by newline-delimited JSON, which is what StdioServerTransport speaks.
+// GRAPH_DATA_DIR is blanked before `env` is applied, and that is load-bearing.
+// It beats GRAPH_PROJECT_DIR when the data directory is resolved, so a developer
+// who has followed /skill-graph:setup-global — the shared-catalogue setup this
+// plugin ships — inherits it into the spawned server, and every test below then
+// reads their own real graph instead of the fixture.
+//
+// A caller that genuinely wants it set passes it in `env` and wins, because the
+// spread comes second.
 function connect(command, args, env) {
-  const proc = spawn(command, args, { env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"] });
+  const clean = { ...process.env, GRAPH_DATA_DIR: "", ...env };
+  const proc = spawn(command, args, { env: clean, stdio: ["pipe", "pipe", "pipe"] });
   const pending = new Map();
   let buf = "";
   let stderr = "";
@@ -269,4 +278,17 @@ test("search_ranked still ranks a single word exactly as before", async () => {
 test("a query of only stopwords does not silently match everything", async () => {
   const out = unwrap(await rpc("tools/call", { name: "search_ranked", arguments: { text: "the and of" } }));
   expect(out.results.length).toBe(0);
+});
+
+// --- the harness itself ----------------------------------------------------
+
+test("the fixture server reads the fixture graph, not the developer's own", () => {
+  // Regression guard for a leak that made this whole file's verdict depend on
+  // whose machine ran it. It is asserted on the harness rather than on any one
+  // symptom, because each symptom was a different test failing for a reason
+  // that named nothing.
+  const seen = connect("node", [BUNDLE], { GRAPH_PROJECT_DIR: project, CLAUDE_PLUGIN_ROOT: PLUGIN });
+  seen.proc.kill();
+  expect(existsSync(join(graphDir, "graph-data.json"))).toBe(true);
+  expect(process.env.GRAPH_DATA_DIR ?? "").not.toBe(graphDir);
 });

@@ -24,10 +24,13 @@ and your own notes, ratings and tags:
 Then, in any project you want a graph for:
 
 ```
-/skill-graph:setup     # say where your skills and agents live
-/skill-graph:build     # scan them
+/skill-graph:setup     # say where your skills and agents live — then offers to build
+/skill-graph:build     # rescan, whenever the sources change
 /skill-graph:view      # look at it, in your browser
 ```
+
+`/skill-graph:setup` asks before building rather than just doing it, because a build with
+`scanRoots` set walks every scan root. Say yes and you go straight from nothing to a graph.
 
 `/skill-graph:view` needs no download — it serves the viewer from `node`, which the plugin
 already requires. `/skill-graph:app` opens the same viewer as a native desktop window
@@ -118,7 +121,30 @@ hand-applied and mean what someone decided. Prefer tags.
 
 **Imported repos have no edges.** `add_repo` extracts frontmatter only; cross-references are not
 computed for imports. Zero connections on an imported skill is a statement about the importer, not
-about the skill.
+about the skill. This is also why importing a directory you already configured as a source is worse
+than useless, and why it is refused — see below.
+
+## When two things share a name
+
+Two unrelated repos may each hold a `code-reviewer`, and both belong in the graph. So a lookup by
+name can be genuinely ambiguous, and the answer names the ids instead:
+
+```json
+{ "error": "ambiguous", "candidates": ["myproj:agent:code-reviewer", "import:other:agent:code-reviewer"] }
+```
+
+Every tool that takes a node also accepts an id, so a candidate from that list can be passed straight
+back to resolve the tie — including `install_skill` and `uninstall_skill`, where picking the wrong one
+copies or deletes real files.
+
+**`add_repo` refuses a directory the build already catalogues.** Both routes would reach the same
+files — the build writes them to `graph-data.json`, an import stores them in `overlay.json`, and the
+two are merged at read time — so every item under it would appear twice under one name, and no id
+could tell them apart because they *are* the same file. It stops before writing anything, naming the
+file that is already in the graph and ending "Nothing was imported."
+
+Two different repos that happen to share a skill name are fine and still import; the check is on
+paths, not names.
 
 ## The graph is a snapshot
 
@@ -129,9 +155,14 @@ themselves; nothing else does.
 ## Development
 
 ```bash
-bun test                 # unit + end-to-end
-bun run bundle           # rebuild server/server.bundle.mjs after editing server/
+bun install --frozen-lockfile   # exactly the versions CI and the bundle were built from
+bun test                        # unit + end-to-end
+bun run bundle                  # rebuild server/server.bundle.mjs after editing server/
 ```
+
+`bun.lock` pins what the committed bundle is compiled from, and `app/package-lock.json` pins the
+Electron the desktop app was tested against. CI installs with `--frozen-lockfile`, so a dependency
+bumped without updating the lockfile fails the run instead of quietly shipping.
 
 The viewer can be run directly, which is the fastest way to iterate on `app/`:
 

@@ -31,7 +31,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: bun install
+      # --frozen-lockfile so CI fails on a lockfile that no longer matches
+      # package.json, instead of silently resolving something newer than what
+      # the committed bundle was built from.
+      - run: bun install --frozen-lockfile
 
       - run: bun test
 

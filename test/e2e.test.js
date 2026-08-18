@@ -162,14 +162,33 @@ test("the shipped bundle exposes its tools", async () => {
 // When a name is ambiguous these tools answer with candidate ids. A caller that
 // reads only the schema has no other way to learn that an id is a legal input,
 // so the ambiguity it was handed would have no resolution it could reach.
-test("tools that take a node name advertise that an id is accepted", async () => {
+//
+// Derived from tools/list rather than checked against a list written here. The
+// first version of this test named five tools and passed while install_skill,
+// uninstall_skill and add_custom_edge's `to` were all still undocumented — a
+// test that enumerates its own subjects cannot report one it forgot, and the
+// two it forgot were the pair that write to disk. Anything that adds a
+// node-reference parameter is now covered without this file being touched.
+const NODE_REF_PARAMS = ["name", "a", "b", "from", "to"];
+
+test("every node-reference parameter advertises that an id is accepted", async () => {
   const { result } = await rpc("tools/list", {});
-  const byName = Object.fromEntries(result.tools.map((t) => [t.name, t]));
-  for (const tool of ["get_node", "graph_neighbors", "projects_using", "add_note", "rate_skill"]) {
-    const desc = byName[tool].inputSchema.properties.name.description || "";
-    expect(desc).toContain("id");
+  const missing = [];
+  for (const tool of result.tools) {
+    const props = tool.inputSchema?.properties || {};
+    for (const param of NODE_REF_PARAMS) {
+      if (!props[param] || props[param].type !== "string") continue;
+      if (!(props[param].description || "").includes("id")) missing.push(`${tool.name}.${param}`);
+    }
   }
-  expect(byName.graph_path.inputSchema.properties.a.description).toContain("id");
+  expect(missing).toEqual([]);
+
+  // Guard the guard: if the parameter names ever change, the loop above would
+  // silently inspect nothing and pass. It has to be finding real ones.
+  const checked = result.tools.filter((t) =>
+    NODE_REF_PARAMS.some((p) => t.inputSchema?.properties?.[p]?.type === "string")
+  );
+  expect(checked.length).toBeGreaterThanOrEqual(15);
 });
 
 test("find_skills returns a fixture node through the real server", async () => {

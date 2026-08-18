@@ -35341,7 +35341,7 @@ var require_server3 = __commonJS(() => {
     description: "Link two existing nodes with a relationship the automated text-scan didn't catch (e.g. 'these two skills work well together in practice'). Stored in the same durable overlay as notes — survives regeneration. The edge is real: it participates in graph_path, graph_neighbors, related_by_connections and best_skills' degree count, and renders in the desktop app as a distinct line.",
     inputSchema: {
       from: z.string().describe(`source node — ${NODE_REF}`),
-      to: z.string().describe("target node name"),
+      to: z.string().describe(`target node — ${NODE_REF}`),
       label: z.string().optional().describe("short relationship label, default 'related'"),
       weight: z.number().optional().describe("relationship strength, default 1 — higher pulls the two nodes closer together visually")
     }

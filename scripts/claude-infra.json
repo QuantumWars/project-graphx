@@ -1,0 +1,9 @@
+{
+  "_comment": "The kinds of authored infrastructure a .claude directory holds, and how each one is stored on disk. Read at runtime by build-graph.py, scan-project-usage.py and the MCP server, so the three can never disagree about what 'installed' means. Derived by surveying real .claude directories, not from documentation: 'layout' is flat for a directory of .md files each of which is one item, and dir for a directory of directories each holding one entry file. Types absent here are absent on purpose. hooks/ holds shell scripts with no frontmatter, and sessions/, memory/, plans/ and telemetry/ are runtime state rather than anything a person authors.",
+  "types": [
+    { "kind": "skill",        "installDir": "skills",        "layout": "dir",  "entryFile": "SKILL.md" },
+    { "kind": "agent",        "installDir": "agents",        "layout": "flat" },
+    { "kind": "command",      "installDir": "commands",      "layout": "flat" },
+    { "kind": "output-style", "installDir": "output-styles", "layout": "flat" }
+  ]
+}

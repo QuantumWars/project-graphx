@@ -15,6 +15,25 @@ happens to be, so a relative root like ".claude/skills" only has one stable
 meaning: relative to the project the graph belongs to."""
 import os, re, json, sys
 
+# The kinds of .claude infrastructure this can catalogue, and how each is laid
+# out on disk. Loaded from a file the scanner and the MCP server read too — a
+# second copy of this table is how build, scan and install come to disagree
+# about what "installed" means, which is the one thing all three must share.
+#
+# Loaded on first use rather than at import. The category heuristic in here is
+# exec'd by a parity test with a bare namespace, where __file__ does not exist,
+# so reading a file next to __file__ at import time turns that test into a
+# NameError about something it is not testing.
+_INFRA = None
+
+def infra_types():
+    global _INFRA
+    if _INFRA is None:
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "claude-infra.json")) as f:
+            _INFRA = {t["kind"]: t for t in json.load(f)["types"]}
+    return _INFRA
+
 def load_roots(config_path, project_root):
     if not os.path.isfile(config_path):
         print(f"graph config not found: {config_path}", file=sys.stderr)
@@ -34,7 +53,14 @@ def load_roots(config_path, project_root):
         if not os.path.isdir(root):
             print(f"source root does not exist, skipping: {root}", file=sys.stderr)
             continue
-        roots.append((e["repo"], root, e["kind"]))
+        kind = e["kind"]
+        if kind not in infra_types():
+            # Previously any unrecognised kind fell through to the skill walker,
+            # so a typo produced an empty catalogue rather than a complaint.
+            print(f'unknown kind "{kind}" for root {root}; expected one of: '
+                  + ", ".join(infra_types()), file=sys.stderr)
+            sys.exit(1)
+        roots.append((e["repo"], root, kind))
     if not roots:
         print("every configured source root is missing on disk — nothing to catalogue.", file=sys.stderr)
         sys.exit(1)
@@ -210,20 +236,28 @@ nodes = []
 node_by_name = {}  # name -> list of node ids (names can collide across type/repo)
 bodies = {}  # id -> body text (for edge extraction)
 
+# The split is by LAYOUT, not by kind. An agent, a command and an output style
+# are all one .md file carrying frontmatter, so they walk identically and only
+# differ in the type they are recorded as; a skill is a directory holding an
+# entry file. Keying on layout is what lets a new .claude type be added to
+# claude-infra.json without another branch here.
 for repo, root, kind in ROOTS:
-    if kind == "agent":
+    if infra_types()[kind]["layout"] == "flat":
         files = sorted(f for f in os.listdir(root) if f.endswith(".md"))
         for f in files:
             path = os.path.join(root, f)
             text = read(path)
             fm, body = frontmatter(text)
+            # Falls back to the filename because a command's frontmatter
+            # carries only a description — the name IS the filename, which is
+            # also how Claude Code addresses it.
             name = fm.get("name", f[:-3])
             desc = fm.get("description", "")
             tools_raw = fm.get("tools", "").strip("[]")
             tools = [t.strip() for t in re.split(r"[,\s]+", tools_raw) if t.strip()]
-            nid = f"{repo}:agent:{name}"
+            nid = f"{repo}:{kind}:{name}"
             node = {
-                "id": nid, "name": name, "type": "agent", "repo": repo,
+                "id": nid, "name": name, "type": kind, "repo": repo,
                 "description": desc, "tools": tools,
                 "category": category_for(name, desc),
                 "path": path,
@@ -232,18 +266,19 @@ for repo, root, kind in ROOTS:
             node_by_name.setdefault(name, []).append(nid)
             bodies[nid] = body
     else:
+        entry = infra_types()[kind]["entryFile"]
         dirs = sorted(d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d)))
         for d in dirs:
-            path = os.path.join(root, d, "SKILL.md")
+            path = os.path.join(root, d, entry)
             if not os.path.isfile(path):
                 continue
             text = read(path)
             fm, body = frontmatter(text)
             name = fm.get("name", d)
             desc = fm.get("description", "")
-            nid = f"{repo}:skill:{name}"
+            nid = f"{repo}:{kind}:{name}"
             node = {
-                "id": nid, "name": name, "type": "skill", "repo": repo,
+                "id": nid, "name": name, "type": kind, "repo": repo,
                 "description": desc, "tools": [],
                 "category": category_for(name, desc),
                 "path": path,

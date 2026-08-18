@@ -11,6 +11,7 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const paths = require("./paths.js");
+const infra = require("./infra-types.js");
 
 function resolveProject(g, label) {
   const q = label.trim().toLowerCase();
@@ -22,17 +23,11 @@ function resolveProject(g, label) {
   return null;
 }
 
-// Real, on-disk install path for a node inside a project's .claude/ — same
-// filename convention scan-project-usage.py already uses to detect whether
-// something is installed, so install/uninstall and the scanner never disagree
-// about what "installed" means.
-function installPathFor(node, projectPath) {
-  if (node.type === "agent") {
-    return path.join(projectPath, ".claude", "agents", path.basename(node.path));
-  }
-  const skillDirName = path.basename(path.dirname(node.path));
-  return path.join(projectPath, ".claude", "skills", skillDirName);
-}
+// Delegated to the shared table, so the directory an item installs into is the
+// same string the scanner looks in. This used to be a two-branch function that
+// assumed everything not an agent was a skill, which silently put a command in
+// .claude/skills/.
+const installPathFor = (node, projectPath) => infra.installPathFor(node, projectPath);
 
 // The scanner is a plugin-owned script but writes a project-owned file, so it
 // is addressed absolutely on both sides — there is no working directory from
@@ -95,7 +90,7 @@ function installSkill(g, q, skillName, projectLabel) {
   if (r.notFound) return { error: `no node matches "${skillName}"` };
   if (r.ambiguous) return { error: "ambiguous", candidates: r.ambiguous };
   const node = r.node;
-  if (node.type !== "agent" && node.type !== "skill") return { error: `"${node.name}" is a ${node.type}, not an agent or skill — nothing to install` };
+  if (!infra.spec(node.type)) return { error: `"${node.name}" is a ${node.type}, which is not something that installs into a project (installable: ${infra.kinds().join(", ")})` };
 
   const proj = resolveProject(g, projectLabel);
   if (!proj) return { error: `no scanned project matches "${projectLabel}"` };
@@ -116,7 +111,11 @@ function installSkill(g, q, skillName, projectLabel) {
   if (!paths.pythonBin()) return { error: noPythonMessage() };
 
   fs.mkdirSync(path.dirname(destAbs), { recursive: true });
-  if (node.type === "agent") {
+  // Copy by layout, for the same reason the path is resolved by layout. Keying
+  // on `type === "agent"` here sent a command down the directory branch and
+  // produced .claude/commands/release.md/release.md — a path the scanner then
+  // reported as not installed, because it was looking for a file.
+  if (infra.spec(node.type).layout === "flat") {
     fs.copyFileSync(srcAbs, destAbs);
   } else {
     fs.cpSync(path.dirname(srcAbs), destAbs, { recursive: true });
@@ -146,6 +145,7 @@ function uninstallSkill(g, q, skillName, projectLabel) {
   if (!proj) return { error: `no scanned project matches "${projectLabel}"` };
   if (proj.ambiguous) return { error: "ambiguous project", candidates: proj.ambiguous };
 
+  if (!infra.spec(node.type)) return { error: `"${node.name}" is a ${node.type}, which never installs into a project` };
   const targetAbs = installPathFor(node, proj.path);
   if (!fs.existsSync(targetAbs)) return { error: `not installed at ${targetAbs}` };
 

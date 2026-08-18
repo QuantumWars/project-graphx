@@ -15,6 +15,10 @@ const overlay = require("./graph-overlay.js");
 const installer = require("./skill-installer.js");
 const repoImporter = require("./repo-importer.js");
 
+// Filterable types come from the shared table rather than a literal list, so a
+// kind added to claude-infra.json is filterable the same day it is catalogued.
+const INFRA_KINDS = require("./infra-types.js").kinds();
+
 const server = new McpServer({ name: "skill-graph", version: "0.1.1" });
 
 function ok(obj) {
@@ -36,7 +40,7 @@ server.registerTool(
       "Rank this project's catalogued agents and skills by how many other real files actually reference them — a counted signal drawn from the source text, not a popularity guess. Optionally filter by type (agent|skill) or raw category (e.g. 'security', 'review', 'language:python').",
     inputSchema: {
       n: z.number().int().min(1).optional().describe("how many to return, default 15"),
-      type: z.enum(["agent", "skill"]).optional(),
+      type: z.enum(INFRA_KINDS).optional(),
       category: z.string().optional().describe("raw category string or substring, e.g. 'security'"),
     },
   },
@@ -399,7 +403,7 @@ server.registerTool(
     description:
       "The actual answer to 'give me the correct skills/agents for X' — not a ranked guess, a precise filter. Combine type + category + tags (ALL must match by default; tagMode:'any' to broaden) + a text match to narrow the whole catalog down to exactly what a task needs. Returns real, resolved file paths ready to Read or hand to install_skill — not just names you'd have to look up again. Call list_categories and list_tags first so your filter values actually exist in the catalog.",
     inputSchema: {
-      type: z.enum(["agent", "skill"]).optional(),
+      type: z.enum(INFRA_KINDS).optional(),
       categories: z.array(z.string()).optional(),
       tags: z.array(z.string()).optional(),
       tagMode: z.enum(["all", "any"]).optional().describe("default 'all' — every listed tag must match"),

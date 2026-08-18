@@ -1,6 +1,7 @@
 # Skill Graph
 
-A Claude Code plugin that turns the skills and agents you already have into a graph you can
+A Claude Code plugin that turns the skills, agents, commands and output styles you already have
+into a graph you can
 query — from a session, in your browser, or in a desktop app.
 
 It catalogues every agent and skill in the folders you point it at, counts which of them actually
@@ -126,9 +127,25 @@ never touch.
 }
 ```
 
-- **sources** — directories holding the agents and skills to catalogue. `kind: "agent"` for a folder
-  of `*.md`; `kind: "skill"` for a folder of `<name>/SKILL.md` directories. Relative paths resolve
-  against the project root. A missing root is skipped with a warning, not a crash.
+- **sources** — directories of `.claude` infrastructure to catalogue. Four kinds, listed in
+  `scripts/claude-infra.json`, which the build, the usage scan and the MCP server all read so they
+  cannot disagree about where a thing lives:
+
+  | `kind` | directory | on disk |
+  | --- | --- | --- |
+  | `skill` | `skills` | `<name>/SKILL.md` |
+  | `agent` | `agents` | `<name>.md` |
+  | `command` | `commands` | `<name>.md` |
+  | `output-style` | `output-styles` | `<name>.md` |
+
+  A command's frontmatter carries no `name:`, so its filename is its name — which is also how
+  Claude Code addresses it. Relative paths resolve against the project root. A missing root is
+  skipped with a warning; an unrecognised `kind` is an error, because it used to be walked as a
+  skill and produced an empty catalogue instead of a complaint.
+
+  `.claude/hooks` is not catalogued: hook scripts carry no frontmatter, so there is no name or
+  description to put in a graph. `/skill-graph:push` reports them rather than passing over them
+  silently.
 - **scanRoots** — trees searched for projects that have those skills installed. This is what fills
   in "who actually uses this". `[]` means scan nothing, and is honoured as written.
 - **scanExclude** — drop any path containing one of these substrings.

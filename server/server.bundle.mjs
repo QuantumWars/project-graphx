@@ -34958,12 +34958,41 @@ var require_graph_query = __commonJS((exports, module) => {
   };
 });
 
+// server/infra-types.js
+var require_infra_types = __commonJS((exports, module) => {
+  var fs = __require("fs");
+  var path = __require("path");
+  var paths = require_paths();
+  var cached;
+  function table() {
+    if (cached)
+      return cached;
+    const file = path.join(paths.pluginRoot(), "scripts", "claude-infra.json");
+    const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
+    cached = new Map(raw.types.map((t) => [t.kind, t]));
+    return cached;
+  }
+  var kinds = () => [...table().keys()];
+  var spec = (kind) => table().get(kind) || null;
+  function installPathFor(node, projectPath) {
+    const s = spec(node.type);
+    if (!s)
+      return null;
+    if (s.layout === "flat") {
+      return path.join(projectPath, ".claude", s.installDir, path.basename(node.path));
+    }
+    return path.join(projectPath, ".claude", s.installDir, path.basename(path.dirname(node.path)));
+  }
+  module.exports = { kinds, spec, installPathFor };
+});
+
 // server/skill-installer.js
 var require_skill_installer = __commonJS((exports, module) => {
   var fs = __require("fs");
   var path = __require("path");
   var { execFileSync } = __require("child_process");
   var paths = require_paths();
+  var infra = require_infra_types();
   function resolveProject(g, label) {
     const q = label.trim().toLowerCase();
     const exact = g.data.nodes.find((n) => n.type === "project" && n.name.toLowerCase() === q);
@@ -34976,13 +35005,7 @@ var require_skill_installer = __commonJS((exports, module) => {
       return { ambiguous: sub.map((n) => n.name) };
     return null;
   }
-  function installPathFor(node, projectPath) {
-    if (node.type === "agent") {
-      return path.join(projectPath, ".claude", "agents", path.basename(node.path));
-    }
-    const skillDirName = path.basename(path.dirname(node.path));
-    return path.join(projectPath, ".claude", "skills", skillDirName);
-  }
+  var installPathFor = (node, projectPath) => infra.installPathFor(node, projectPath);
   function rescan() {
     const py = paths.pythonBin();
     if (!py)
@@ -35017,8 +35040,8 @@ var require_skill_installer = __commonJS((exports, module) => {
     if (r.ambiguous)
       return { error: "ambiguous", candidates: r.ambiguous };
     const node = r.node;
-    if (node.type !== "agent" && node.type !== "skill")
-      return { error: `"${node.name}" is a ${node.type}, not an agent or skill — nothing to install` };
+    if (!infra.spec(node.type))
+      return { error: `"${node.name}" is a ${node.type}, which is not something that installs into a project (installable: ${infra.kinds().join(", ")})` };
     const proj = resolveProject(g, projectLabel);
     if (!proj)
       return { error: `no scanned project matches "${projectLabel}"` };
@@ -35033,7 +35056,7 @@ var require_skill_installer = __commonJS((exports, module) => {
     if (!paths.pythonBin())
       return { error: noPythonMessage() };
     fs.mkdirSync(path.dirname(destAbs), { recursive: true });
-    if (node.type === "agent") {
+    if (infra.spec(node.type).layout === "flat") {
       fs.copyFileSync(srcAbs, destAbs);
     } else {
       fs.cpSync(path.dirname(srcAbs), destAbs, { recursive: true });
@@ -35059,6 +35082,8 @@ var require_skill_installer = __commonJS((exports, module) => {
       return { error: `no scanned project matches "${projectLabel}"` };
     if (proj.ambiguous)
       return { error: "ambiguous project", candidates: proj.ambiguous };
+    if (!infra.spec(node.type))
+      return { error: `"${node.name}" is a ${node.type}, which never installs into a project` };
     const targetAbs = installPathFor(node, proj.path);
     if (!fs.existsSync(targetAbs))
       return { error: `not installed at ${targetAbs}` };
@@ -35309,6 +35334,7 @@ var require_server3 = __commonJS(() => {
   var overlay = require_graph_overlay();
   var installer = require_skill_installer();
   var repoImporter = require_repo_importer();
+  var INFRA_KINDS = require_infra_types().kinds();
   var server = new McpServer({ name: "skill-graph", version: "0.1.1" });
   function ok(obj) {
     return { content: [{ type: "text", text: JSON.stringify(obj, null, 2) }] };
@@ -35319,7 +35345,7 @@ var require_server3 = __commonJS(() => {
     description: "Rank this project's catalogued agents and skills by how many other real files actually reference them — a counted signal drawn from the source text, not a popularity guess. Optionally filter by type (agent|skill) or raw category (e.g. 'security', 'review', 'language:python').",
     inputSchema: {
       n: z.number().int().min(1).optional().describe("how many to return, default 15"),
-      type: z.enum(["agent", "skill"]).optional(),
+      type: z.enum(INFRA_KINDS).optional(),
       category: z.string().optional().describe("raw category string or substring, e.g. 'security'")
     }
   }, async ({ n, type, category }) => ok(q.best(q.loadGraph(), { n, type, category })));
@@ -35556,7 +35582,7 @@ var require_server3 = __commonJS(() => {
     title: "Get the exact set of files matching real criteria",
     description: "The actual answer to 'give me the correct skills/agents for X' — not a ranked guess, a precise filter. Combine type + category + tags (ALL must match by default; tagMode:'any' to broaden) + a text match to narrow the whole catalog down to exactly what a task needs. Returns real, resolved file paths ready to Read or hand to install_skill — not just names you'd have to look up again. Call list_categories and list_tags first so your filter values actually exist in the catalog.",
     inputSchema: {
-      type: z.enum(["agent", "skill"]).optional(),
+      type: z.enum(INFRA_KINDS).optional(),
       categories: z.array(z.string()).optional(),
       tags: z.array(z.string()).optional(),
       tagMode: z.enum(["all", "any"]).optional().describe("default 'all' — every listed tag must match"),

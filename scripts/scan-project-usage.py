@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Scan projects on this machine for which of the catalogued agents and skills
-each one actually has installed in its own .claude/agents or .claude/skills —
-real filesystem presence, not a guess.
+"""Scan projects on this machine for which of the catalogued items each one
+actually has installed in its own .claude/ — real filesystem presence, not a
+guess. Which kinds exist, and the directory each lives in, come from
+claude-infra.json rather than from a branch per kind here.
 
 Which trees get scanned, and what is excluded from them, come from the
 project's own .claude/graph/config.json ("scanRoots", "scanExclude"). Nothing
@@ -27,6 +28,12 @@ Usage:
 import json, os, sys
 
 DEFAULT_EXCLUDES = ["/node_modules/"]
+
+# Shared with build-graph.py and the MCP server. Install detection and install
+# itself must agree on the directory and the entry file for every kind, or a
+# just-installed item reads as missing forever.
+INFRA = {t["kind"]: t for t in json.load(open(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "claude-infra.json")))["types"]}
 
 def load_scan_config(config_path):
     if not config_path or not os.path.isfile(config_path):
@@ -129,15 +136,19 @@ def install_filename(node):
     # Claude Code discovers skills/agents by directory/file name on disk, so
     # that's the only name that actually determines whether an install works.
     parts = node["path"].split("/")
-    if node["type"] == "agent":
+    spec = INFRA.get(node["type"])
+    if spec and spec["layout"] == "flat":
         return parts[-1]  # "code-reviewer.md"
     return parts[-2]  # skills/<this>/SKILL.md
 
 def scan(project_root, filename, node_type):
-    if node_type == "agent":
-        return os.path.isfile(os.path.join(project_root, ".claude", "agents", filename))
-    else:
-        return os.path.isfile(os.path.join(project_root, ".claude", "skills", filename, "SKILL.md"))
+    spec = INFRA.get(node_type)
+    if not spec:
+        return False  # a type this build does not know how to locate on disk
+    base = os.path.join(project_root, ".claude", spec["installDir"], filename)
+    if spec["layout"] == "flat":
+        return os.path.isfile(base)
+    return os.path.isfile(os.path.join(base, spec["entryFile"]))
 
 def main():
     args = sys.argv[1:]

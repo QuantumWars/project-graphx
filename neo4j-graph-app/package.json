@@ -1,0 +1,17 @@
+{
+  "name": "project-graphx",
+  "productName": "project-graphx",
+  "version": "1.0.0",
+  "description": "A Neo4j-Browser-style graph explorer for your Claude Code agents and skills",
+  "main": "src/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "regenerate-data": "cd .. && python3 build-graph.py sources.json neo4j-graph-app/data/graph-data.json && python3 scan-project-usage.py neo4j-graph-app/data/graph-data.json",
+    "pack": "electron-packager . \"project-graphx\" --platform=darwin --arch=arm64 --out=dist --overwrite --icon=build/icon.icns"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-packager": "^17.1.2"
+  }
+}

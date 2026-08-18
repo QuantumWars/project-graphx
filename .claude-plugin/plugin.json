@@ -1,0 +1,9 @@
+{
+  "name": "skill-graph",
+  "displayName": "Skill Graph",
+  "version": "0.1.0",
+  "description": "Your Claude Code skills and agents as a queryable graph. Catalogues the ones you have, counts which files actually reference which, scans your projects for what is really installed, and answers questions about all of it from a session — with an optional desktop graph explorer.",
+  "author": { "name": "subha" },
+  "license": "MIT",
+  "keywords": ["claude-code", "plugin", "skills", "agents", "graph", "mcp", "catalogue"]
+}

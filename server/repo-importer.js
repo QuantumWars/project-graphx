@@ -3,22 +3,20 @@
 // heuristic so imported nodes are consistent with the rest of the graph.
 //
 // Stored in the durable overlay (graph-overlay.js), NOT graph-data.json —
-// that file gets fully rebuilt by build-graph.py, which only ever scans the
-// repos listed in sources.json and would silently drop anything else
-// written there.
+// that file gets fully rebuilt by build-graph.py, which only ever scans
+// the configured sources, and would silently drop anything else written there.
 //
 // Scope, stated plainly: this extracts frontmatter (name/description/tools)
 // only. It does NOT compute cross-reference edges the way build-graph.py
-// does for the sources.json repos (that requires scanning every other
-// node's body text for name mentions, repo-wide) — an imported skill starts
-// with zero connections. Use add_custom_edge to link it to related catalog
-// items by hand as you find them.
+// does for configured sources (that requires scanning every other node's body
+// text for name mentions, repo-wide) — an imported skill starts with zero
+// connections. Use add_custom_edge to link it to related catalog items by
+// hand as you find them.
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
-const overlay = require("../graph-overlay.js");
-
-const IMPORT_ROOT = path.join(__dirname, "..", "imported-repos");
+const overlay = require("./graph-overlay.js");
+const paths = require("./paths.js");
 
 function frontmatter(text) {
   if (!text.startsWith("---")) return { fm: {}, body: text };
@@ -35,17 +33,24 @@ function frontmatter(text) {
   return { fm, body: parts.slice(2).join("---") };
 }
 
-// Same heuristic as build-graph.py's category_for(), kept in sync by hand.
-const LANG_TOKENS = ["python", "golang", "go-", "rust", "java-", "kotlin", "swift", "csharp", "cpp", "c++", "php", "perl", "ruby", "typescript", "javascript", "dart", "arkts", "harmonyos", "django", "laravel", "quarkus", "springboot", "fsharp", "angular", "vue", "nuxt", "react", "android", "ios"];
+// A hand-maintained mirror of build-graph.py's category_for(). It had already
+// drifted — this copy still carried the "go-"/"java-" dash workarounds the
+// Python side replaced with real word boundaries — so the two are now pinned
+// together by test/heuristic-parity.test.js, which runs both over the same
+// inputs and fails on any disagreement. Change one, change the other, or the
+// suite says so.
+const LANG_TOKENS = ["python", "golang", "go", "rust", "java", "kotlin", "swift", "csharp", "cpp", "c++", "php", "perl", "ruby", "typescript", "javascript", "dart", "arkts", "harmonyos", "django", "laravel", "quarkus", "springboot", "fsharp", "angular", "vue", "nuxt", "react", "android", "ios", "swiftui", "flutter"];
+const LANG_ALIAS = { golang: "go", "c++": "cpp", swiftui: "swift", flutter: "dart" };
+const BOUNDED_KEYWORDS = new Set(["ci", "cd", "ui", "ml", "api", "3d", "e2e"]);
 const ROLE_SUFFIX = [["reviewer", "review"], ["build-resolver", "build"], ["tdd", "testing"], ["testing", "testing"], ["verification", "verification"], ["security", "security"], ["patterns", "patterns"]];
 const KEYWORD_FALLBACK = [
   [["security", "vuln", "secret", "auth", "injection"], "security"],
   [["test", "tdd", "e2e", "coverage"], "testing"],
   [["review", "audit", "lint", "quality"], "review"],
-  [["doc", "readme", "comment"], "docs"],
+  [["docs", "documentation", "docstring", "readme", "comment"], "docs"],
   [["deploy", "docker", "ci", "cd", "devops", "infra", "kubernetes", "migration"], "devops"],
   [["database", "postgres", "sql", "clickhouse", "supabase"], "database"],
-  [["frontend", "react", "ui", "component", "css", "design"], "frontend"],
+  [["frontend", "react", "ui", "component", "css", "design system", "ui design"], "frontend"],
   [["backend", "api", "server"], "backend"],
   [["research", "market", "investor", "competitor"], "research"],
   [["writ", "content", "copy", "marketing", "social", "seo", "brand"], "content-marketing"],
@@ -53,18 +58,35 @@ const KEYWORD_FALLBACK = [
   [["accessib", "a11y"], "accessibility"],
   [["video", "audio", "image", "3d"], "media"],
 ];
-function categoryFor(name, desc) {
-  const hay = `${name} ${desc}`.toLowerCase();
-  for (const tok of LANG_TOKENS) {
-    if (hay.includes(tok)) {
-      let norm = tok.replace(/-$/, "").replace("c++", "cpp");
-      if (norm === "golang") norm = "go";
-      return `language:${norm}`;
-    }
+
+const RE_CACHE = new Map();
+function wordIn(tok, hay) {
+  let rx = RE_CACHE.get(tok);
+  if (!rx) {
+    rx = new RegExp(`(?<![a-z0-9])${tok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z])`);
+    RE_CACHE.set(tok, rx);
   }
-  for (const [suffix, cat] of ROLE_SUFFIX) if (name.toLowerCase().includes(suffix)) return cat;
-  for (const [kws, cat] of KEYWORD_FALLBACK) if (kws.some((k) => hay.includes(k))) return cat;
-  return "general";
+  return rx.test(hay);
+}
+const kwIn = (kw, hay) => (BOUNDED_KEYWORDS.has(kw) ? wordIn(kw, hay) : hay.includes(kw));
+
+function langOf(hay) {
+  for (const tok of [...LANG_TOKENS].sort((a, b) => b.length - a.length)) {
+    if (wordIn(tok, hay)) return `language:${LANG_ALIAS[tok] || tok}`;
+  }
+  return null;
+}
+
+function categoryFor(name, desc) {
+  const lname = name.toLowerCase();
+  const hay = `${lname} ${(desc || "").toLowerCase()}`;
+  const lang = langOf(lname);
+  if (lang) return lang;
+  for (const [suffix, cat] of ROLE_SUFFIX) if (lname.includes(suffix)) return cat;
+  for (const haystack of [lname, hay]) {
+    for (const [kws, cat] of KEYWORD_FALLBACK) if (kws.some((k) => kwIn(k, haystack))) return cat;
+  }
+  return langOf(hay) || "general";
 }
 
 function slugFromSource(source) {
@@ -80,9 +102,9 @@ function cloneOrLocate(source) {
     return { repoPath: abs, label: path.basename(abs), isLocal: true };
   }
   const label = slugFromSource(source);
-  const dest = path.join(IMPORT_ROOT, label);
+  const dest = path.join(paths.importRoot(), label);
   if (fs.existsSync(dest)) return { error: `"${label}" already has a local clone at ${dest} — remove_repo first to re-import` };
-  fs.mkdirSync(IMPORT_ROOT, { recursive: true });
+  fs.mkdirSync(paths.importRoot(), { recursive: true });
   try {
     execFileSync("git", ["clone", "--depth", "1", source, dest], { stdio: "pipe" });
   } catch (err) {
@@ -156,4 +178,6 @@ function removeRepo(label, deleteClone) {
   return result;
 }
 
-module.exports = { addRepo, removeRepo };
+// categoryFor is exported so the parity suite can run it against the Python
+// implementation. It is the same function the import path uses — not a copy.
+module.exports = { addRepo, removeRepo, categoryFor };

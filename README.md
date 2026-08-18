@@ -1,182 +1,154 @@
-# project-graphx
+# Skill Graph
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Latest release](https://img.shields.io/github/v/release/QuantumWars/project-graphx?label=release)](https://github.com/QuantumWars/project-graphx/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS%20(arm64)-lightgrey.svg)](https://github.com/QuantumWars/project-graphx/releases/latest)
+A Claude Code plugin that turns the skills and agents you already have into a graph you can
+query — from a session, in your browser, or in a desktop app.
 
-A local knowledge graph for your `.claude/` agents and skills: a desktop app
-for exploring it visually, and an MCP server so Claude Code itself can query,
-tag, install, and reorganize the catalog directly.
+It catalogues every agent and skill in the folders you point it at, counts which of them actually
+mention which others, scans your machine for projects that really have each one installed, and
+exposes all of it as MCP tools. Everything it knows comes from reading real files.
 
-Point it at any repo (or several) that follow the `.claude/agents` /
-`.claude/skills` convention, and it builds a real graph: which agents/skills
-actually reference each other by name, which of your real projects on disk
-have which of them installed, and lets you browse, search, rate, note, and
-tag all of it — with every write landing on real files, not a mock.
+![The graph](.github/assets/screenshot-graph.png)
 
-<p align="center">
-  <img src=".github/assets/screenshot-graph.png" alt="project-graphx graph explorer showing a catalog of agents and skills as a colored, force-directed graph" width="100%">
-</p>
+Click any node for what references it, what it references, which projects have it installed,
+and your own notes, ratings and tags:
 
-<sub>Screenshots throughout this README use a small synthetic sample catalog, not real data — nothing shipped in this repo.</sub>
+![A node in detail](.github/assets/screenshot-detail.png)
 
-## Why
+## Install
 
-Skill/agent catalogs grow past the point where a flat file listing is useful.
-This turns that listing into something you can actually navigate: a canvas
-you can search and click through, and — more importantly — a set of MCP
-tools so Claude Code can ask "what's the correct set of skills for this
-task" and get back real, resolved file paths instead of a guess.
-
-## Features
-
-**Desktop app** (Electron)
-- Force-directed graph of every agent/skill, sized by how often it's
-  referenced elsewhere and colored by category
-- A query bar for real commands: `best`, `neighbors <name>`, `open <name>`,
-  `path a -> b`, `cat:<category>`, `type:agent`, `projects <name>`,
-  `project:<label>`
-- Click any node for its description, real file path, notes, and a 5-star
-  rating you can add to on the spot
-- A tag panel for filtering by real, multi-label use-case tags (a skill can
-  be `react` *and* `testing` *and* `security` at once — categories only give
-  you one bucket)
-- Reveals the actual source file in Finder
-
-<p align="center">
-  <img src=".github/assets/screenshot-detail.png" alt="Detail panel for a selected node showing its real file path, references, a 5-star rating, tags, and notes" width="100%">
-</p>
-<p align="center"><sub><code>neighbors release-manager</code> — the query bar, live highlighting, and the detail panel's rating/tags/notes, all in one shot.</sub></p>
-
-**MCP server** (`graph-mcp-server/`) — 27 tools covering:
-- Search & ranking: `search_ranked`, `find_skills`, `best_skills`,
-  `related_by_connections`, `graph_neighbors`, `graph_path`
-- Precise retrieval: `get_file_set` — combine type + category + tags + text
-  to get back the exact, resolved file paths a task needs, not a ranked guess
-- Real filesystem writes: `install_skill` / `uninstall_skill` copy or delete
-  a skill's actual files into/from one of your real projects' `.claude/`
-  folder, and re-scan usage immediately afterward
-- Cataloging any repo: `add_repo` clones (or points at) any GitHub repo or
-  local path and extracts its `.claude/skills` and `.claude/agents` into the
-  catalog
-- Durable annotations: `add_note`, `rate_skill`, `add_custom_edge`,
-  `set_category`, `add_tags` — all stored in an overlay file that survives
-  the next catalog regeneration
-
-**Data layer**
-- `build-graph.py` scans the repos listed in your `sources.json` and infers
-  a category per node from name/description (language keywords, role
-  suffixes, then topic keywords) — a stated heuristic, not an official
-  taxonomy
-- `scan-project-usage.py` scans a real directory tree (`~/code` by default)
-  for every project with its own `.claude/agents` or `.claude/skills`, and
-  records which catalog items each one actually has installed
-- Everything you add by hand (notes, ratings, tags, category overrides,
-  custom edges, imported repos) lives in a separate overlay file, merged in
-  at read time — so it survives every regeneration instead of being
-  overwritten
-
-## Architecture
-
-```mermaid
-flowchart LR
-    S[sources.json] --> B[build-graph.py]
-    B --> G[(graph-data.json)]
-    U[scan-project-usage.py] --> G
-    O[(overlay.json<br/>notes · ratings · tags<br/>custom edges · imports)] -.->|merged at read time| M
-    G --> M[applyOverlay]
-    M --> APP[Electron app]
-    M --> SHIM[browser-preview shim]
-    M --> MCP[MCP server<br/>27 tools]
-
-    style G fill:#2b6cb0,color:#fff,stroke:none
-    style O fill:#805ad5,color:#fff,stroke:none
-    style M fill:#2f855a,color:#fff,stroke:none
+```
+/plugin marketplace add QuantumWars/project-graphx
+/plugin install skill-graph
 ```
 
-`graph-data.json` is fully regenerated by the pipeline; `overlay.json` is
-everything you add by hand and is never touched by a regen. Three separate
-JS runtimes — the Electron main process, a browser-preview shim
-(`web-shim.js`, for opening `index.html` directly), and the MCP server — all
-merge the two the same way, so a note or rating added from any one shows up
-in the others on next load.
+Then, in any project you want a graph for:
 
-## Quick start
-
-```bash
-git clone <this-repo-url> project-graphx
-cd project-graphx
-
-# point the tool at your own repo(s)
-cp sources.example.json sources.json
-# edit sources.json — see sources.example.json for the format
-
-python3 build-graph.py sources.json neo4j-graph-app/data/graph-data.json
-python3 scan-project-usage.py neo4j-graph-app/data/graph-data.json   # optional — links real projects on disk
-
-cd neo4j-graph-app
-npm install
-npm start
+```
+/skill-graph:setup     # say where your skills and agents live
+/skill-graph:build     # scan them
+/skill-graph:view      # look at it, in your browser
 ```
 
-`sources.json` is a list of `{ repo, root, kind }` entries — `kind` is
-`"agent"` (a folder of `<name>.md` files) or `"skill"` (a folder of
-`<name>/SKILL.md` files). It's gitignored; only `sources.example.json` is
-committed.
+`/skill-graph:view` needs no download — it serves the viewer from `node`, which the plugin
+already requires. `/skill-graph:app` opens the same viewer as a native desktop window
+instead, at the cost of a one-time ~280 MB Electron install.
 
-## Download
+## Requirements
 
-Prebuilt macOS (arm64) `.dmg` builds are on the
-[Releases](../../releases) page. The packaged app ships with **no bundled
-graph data** — on first launch it shows setup instructions (the same four
-commands as Quick start above) instead of an empty canvas.
+| For | You need | Notes |
+| --- | --- | --- |
+| The MCP tools | `node` 18+ | The server ships pre-bundled. No `npm install`. |
+| `/skill-graph:build` | `python3` 3.6+ | Standard library only. On macOS this comes with the Xcode command line tools. |
+| `/skill-graph:view` | nothing more | Same `node` as above. |
+| `add_repo` | `git` | Only for importing an external repo's skills. |
+| `/skill-graph:app` | `npm` + ~280 MB | One-time Electron install, on first launch only. Optional. |
+| Running the tests | `bun` | Contributors only. |
 
-macOS Gatekeeper will block the unsigned build on first open — right-click
-the app → **Open** once to allow it.
+**Windows is not supported for `/skill-graph:build`.** The build commands invoke `python3`,
+which Windows Python installs do not usually provide (it is `python` or `py`). `install_skill`
+has the same dependency and fails *after* copying files, so it can leave a half-applied
+state. WSL works.
 
-## MCP setup
+The desktop app's packaging script targets **macOS arm64 only**. On other platforms use
+`/skill-graph:view`, or run it unpackaged with `npm start` from `app/`.
 
-```bash
-cd graph-mcp-server
-npm install
+## Where things live
+
+Code ships with the plugin. Data belongs to the project:
+
+```
+<your project>/.claude/graph/
+├── config.json        what to catalogue, what to scan   (you own this — commit it)
+├── graph-data.json    the built graph                   (regenerated wholesale)
+├── overlay.json       your notes, ratings, tags, edges  (survives rebuilds)
+└── imported-repos/    shallow clones from add_repo
 ```
 
-Add it to your `.mcp.json`:
+No graph data is ever written into the plugin directory, which is wiped on every reinstall. Two
+projects on the same machine get two independent graphs and never see each other's.
+
+The one exception is Electron itself: `/skill-graph:app` installs it under the plugin's `app/`,
+so a plugin update means downloading it again. `/skill-graph:view` has nothing to reinstall,
+which is the main reason it is the default.
+
+`graph-data.json` is rebuilt from scratch by every `/skill-graph:build`. Never edit it by hand —
+your edit will vanish. Everything you add through the tools goes to `overlay.json`, which builds
+never touch.
+
+## Configuring
+
+`.claude/graph/config.json`:
 
 ```json
 {
-  "mcpServers": {
-    "project-graphx": {
-      "command": "node",
-      "args": ["/absolute/path/to/project-graphx/graph-mcp-server/server.js"]
-    }
-  }
+  "sources": [
+    { "repo": "my-project", "root": ".claude/agents", "kind": "agent" },
+    { "repo": "my-project", "root": ".claude/skills", "kind": "skill" }
+  ],
+  "scanRoots": ["~/code"],
+  "scanExclude": ["/node_modules/"]
 }
 ```
 
+- **sources** — directories holding the agents and skills to catalogue. `kind: "agent"` for a folder
+  of `*.md`; `kind: "skill"` for a folder of `<name>/SKILL.md` directories. Relative paths resolve
+  against the project root. A missing root is skipped with a warning, not a crash.
+- **scanRoots** — trees searched for projects that have those skills installed. This is what fills
+  in "who actually uses this". `[]` means scan nothing, and is honoured as written.
+- **scanExclude** — drop any path containing one of these substrings.
+
+A project that owns a configured source is never counted as a user of its own catalogue. Without
+that, a repo cataloguing its own `.claude/skills` would report itself as a user of every skill in
+it, and every usage number would be inflated by one.
+
+## What the tools tell you, and what they don't
+
+**Edges are counted mentions.** An edge exists because one file's text contains another node's name.
+That is a real, reproducible measurement — it is not a curated statement that two things belong
+together. A skill named after a common word collects edges by coincidence.
+
+**Usage is a filesystem fact.** `usedBy` comes from checking whether the file is actually there.
+Absent means "not found under your scan roots", never "unused".
+
+**Categories are a guess.** They come from a keyword heuristic at build time, which reads the name
+first and only falls back to the description when the name says nothing — a thing named
+`python-testing` is Python, a thing that merely *mentions* Python in passing is not. It is still a
+heuristic: it will file some things oddly and it says `general` when it cannot tell. Tags are
+hand-applied and mean what someone decided. Prefer tags.
+
+**Imported repos have no edges.** `add_repo` extracts frontmatter only; cross-references are not
+computed for imports. Zero connections on an imported skill is a statement about the importer, not
+about the skill.
+
+## The graph is a snapshot
+
+It reflects the last build. Add a skill by hand, change a source, or install something outside these
+tools, and it is stale until you build again. `install_skill` and `uninstall_skill` re-scan
+themselves; nothing else does.
+
 ## Development
 
-- `npm run regenerate-data` (from `neo4j-graph-app/`) re-runs the full
-  pipeline: `build-graph.py` then `scan-project-usage.py`, writing straight
-  to `data/graph-data.json`
-- `npm run pack` (electron-packager) → `./make-dmg.sh` builds a
-  distributable `.dmg` from the packaged `.app`
-- A packaged build needs ad-hoc codesigning before it'll launch on your own
-  machine:
-  ```bash
-  codesign --force --deep --sign - dist/project-graphx-darwin-arm64/project-graphx.app
-  ```
+```bash
+bun test                 # unit + end-to-end
+bun run bundle           # rebuild server/server.bundle.mjs after editing server/
+```
 
-## Privacy
+The viewer can be run directly, which is the fastest way to iterate on `app/`:
 
-Everything here runs locally. `scan-project-usage.py` only ever *reads* your
-projects to check whether a `.claude/agents`/`.claude/skills` file exists —
-it never writes outside the graph data file you point it at.
-`install_skill`/`uninstall_skill` write real files, but only into projects
-you explicitly name, never into the repos listed in `sources.json`. Nothing
-in this repo makes a network call except `add_repo`, and only when you give
-it a URL.
+```bash
+node server/viewer-server.js --data-dir <project>/.claude/graph
+```
 
-## License
+**Re-bundle after any change under `server/`.** `.mcp.json` runs the bundle, not the source, so an
+un-bundled edit is an edit that does not ship. The end-to-end suite launches the bundle exactly as
+Claude Code does and will fail if it is stale, and CI rebuilds it and fails if the committed copy
+differs.
 
-[MIT](LICENSE)
+`bun run bundle` also runs `scripts/normalize-bundle.js`, which replaces the `__dirname` literal the
+bundler freezes in at build time with a runtime expression. Without it the artifact would carry the
+absolute path of whoever built it, and two machines would never produce the same bytes — which is
+what makes the CI comparison possible at all.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).

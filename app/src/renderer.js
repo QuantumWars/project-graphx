@@ -9,19 +9,21 @@
   if (!DATA || !DATA.nodes || DATA.nodes.length === 0) {
     document.getElementById("app").innerHTML = `
       <div style="display:flex;align-items:center;justify-content:center;width:100%;height:100vh;padding:40px;box-sizing:border-box;">
-        <div style="max-width:520px;font-family:-apple-system,sans-serif;color:#E8EAED;">
+        <div style="max-width:560px;font-family:-apple-system,sans-serif;color:#E8EAED;">
           <h1 style="font-size:20px;margin:0 0 12px;">No graph data yet</h1>
           <p style="color:#9AA1A8;line-height:1.6;font-size:13px;">
-            This is a template — it visualizes <b>your own</b> Claude Code skills/agents, not bundled data.
-            Point it at a repo and generate a graph first:
+            This viewer shows <b>your own</b> Claude Code skills and agents. Nothing is bundled with it.
+            Build a graph for a project first, from a Claude Code session in that project:
           </p>
           <ol style="color:#9AA1A8;line-height:1.9;font-size:13px;padding-left:20px;">
-            <li>Copy <code style="background:#2B3034;padding:1px 5px;border-radius:4px;">sources.example.json</code> to <code style="background:#2B3034;padding:1px 5px;border-radius:4px;">sources.json</code> and point it at your own repo(s)</li>
-            <li>Run <code style="background:#2B3034;padding:1px 5px;border-radius:4px;">python3 build-graph.py sources.json app/data/graph-data.json</code></li>
-            <li>Run <code style="background:#2B3034;padding:1px 5px;border-radius:4px;">python3 scan-project-usage.py app/data/graph-data.json</code> (optional — links real projects on disk)</li>
-            <li>Relaunch the app</li>
+            <li><code style="background:#2B3034;padding:1px 5px;border-radius:4px;">/skill-graph:setup</code> — say which folders hold your skills and agents</li>
+            <li><code style="background:#2B3034;padding:1px 5px;border-radius:4px;">/skill-graph:build</code> — scan them and write <code style="background:#2B3034;padding:1px 5px;border-radius:4px;">.claude/graph/graph-data.json</code></li>
+            <li><code style="background:#2B3034;padding:1px 5px;border-radius:4px;">/skill-graph:app</code> — reopen this window pointed at that project</li>
           </ol>
-          <p style="color:#62686E;line-height:1.6;font-size:12px;">Full setup, including the MCP server, is in the README.</p>
+          <p style="color:#62686E;line-height:1.6;font-size:12px;">
+            Looking in: <code style="background:#2B3034;padding:1px 5px;border-radius:4px;">${(DATA && DATA.dataDir) || "unknown"}</code><br>
+            Launch with <code style="background:#2B3034;padding:1px 5px;border-radius:4px;">--data-dir &lt;path&gt;</code> or <code style="background:#2B3034;padding:1px 5px;border-radius:4px;">GRAPH_DATA_DIR</code> to point elsewhere.
+          </p>
         </div>
       </div>`;
     return;
@@ -402,8 +404,8 @@
   // so a hidden node stays parked at its correct position and doesn't drift
   // off from where it'll reappear.
   function tick() {
-    // HOME was 0.02, equal to SPRING — a 0-degree node (some catalog nodes
-    // have no real edges at all) has nothing pulling it home except
+    // HOME was 0.02, equal to SPRING — a 0-degree node (59 of 354 catalog
+    // nodes have no real edges at all) has nothing pulling it home except
     // this, so it drifted wherever repulsion from ~400 other nodes pushed it,
     // landing well outside its own category's cluster. Raised well above
     // SPRING so a node's category membership visibly wins over incidental

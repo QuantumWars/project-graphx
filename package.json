@@ -1,0 +1,14 @@
+{
+  "name": "skill-graph-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code plugin: your skills and agents as a queryable graph",
+  "scripts": {
+    "bundle": "bun build server/server.js --target=node --outfile server/server.bundle.mjs && node scripts/normalize-bundle.js",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  }
+}

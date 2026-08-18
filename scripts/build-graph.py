@@ -3,20 +3,42 @@
 nodes/edges JSON for the graph viewer. Stdlib only.
 
 Usage:
-  build-graph.py [sources.json] <output.json>
+  build-graph.py <config.json> <output.json> [--project-root DIR]
 
-sources.json lists which repos to scan and where — see sources.example.json
-for the format. Defaults to ./sources.json when only the output path is given."""
+config.json is the plugin's per-project config (.claude/graph/config.json). It
+may be an object with a "sources" key, or — for the original standalone
+format — a bare array of source entries.
+
+Each source root is resolved against --project-root, not against the current
+working directory. As a plugin this script is invoked from wherever the caller
+happens to be, so a relative root like ".claude/skills" only has one stable
+meaning: relative to the project the graph belongs to."""
 import os, re, json, sys
 
-def load_roots(sources_path):
-    if not os.path.isfile(sources_path):
-        print(f"sources config not found: {sources_path}", file=sys.stderr)
-        print("Copy sources.example.json to sources.json and point it at your own repo(s) first.", file=sys.stderr)
+def load_roots(config_path, project_root):
+    if not os.path.isfile(config_path):
+        print(f"graph config not found: {config_path}", file=sys.stderr)
+        print("Run /skill-graph:setup to create one.", file=sys.stderr)
         sys.exit(1)
-    with open(sources_path) as f:
-        entries = json.load(f)
-    return [(e["repo"], e["root"], e["kind"]) for e in entries]
+    with open(config_path) as f:
+        raw = json.load(f)
+    entries = raw if isinstance(raw, list) else raw.get("sources", [])
+    if not entries:
+        print(f"no sources configured in {config_path} — nothing to catalogue.", file=sys.stderr)
+        print('Add entries under "sources", e.g. {"repo":"my-repo","root":".claude/skills","kind":"skill"}', file=sys.stderr)
+        sys.exit(1)
+    roots = []
+    for e in entries:
+        root = e["root"]
+        root = root if os.path.isabs(root) else os.path.join(project_root, root)
+        if not os.path.isdir(root):
+            print(f"source root does not exist, skipping: {root}", file=sys.stderr)
+            continue
+        roots.append((e["repo"], root, e["kind"]))
+    if not roots:
+        print("every configured source root is missing on disk — nothing to catalogue.", file=sys.stderr)
+        sys.exit(1)
+    return roots
 
 # --- category inference: language/framework tokens win first, then role suffixes,
 # then a description-keyword fallback. Heuristic, stated as such in the UI.
@@ -31,8 +53,12 @@ LANG_TOKENS = [
     "python","golang","go","rust","java","kotlin","swift","csharp","cpp","c++",
     "php","perl","ruby","typescript","javascript","dart","arkts","harmonyos",
     "django","laravel","quarkus","springboot","fsharp","angular","vue","nuxt",
-    "react","android","ios",
+    "react","android","ios","swiftui","flutter",
 ]
+# Tokens whose category is another token's. "swiftui" is Swift; "flutter" is
+# the Dart framework. Without these the word boundary blocks the shorter name
+# ("swift" cannot match inside "swiftui") and the skill loses its language.
+LANG_ALIAS = {"golang": "go", "c++": "cpp", "swiftui": "swift", "flutter": "dart"}
 ROLE_SUFFIX = [
     ("reviewer", "review"),
     ("build-resolver", "build"),
@@ -42,11 +68,19 @@ ROLE_SUFFIX = [
     ("security", "security"),
     ("patterns", "patterns"),
 ]
+# Substring matching is right for the truncated stems below ("vuln",
+# "accessib", "orchestrat") — it is how they catch every inflected form. It is
+# wrong for these, which are complete words that also sit inside unrelated
+# ones: "ci" inside "specialist", "ui" inside "build", "ml" inside "yaml",
+# "api" inside "rapid". Each was found by diffing real categories, not
+# imagined. They alone get word-boundary treatment.
+BOUNDED_KEYWORDS = {"ci", "cd", "ui", "ml", "api", "3d", "e2e"}
+
 KEYWORD_FALLBACK = [
     (["security","vuln","secret","auth","injection"], "security"),
     (["test","tdd","e2e","coverage"], "testing"),
     (["review","audit","lint","quality"], "review"),
-    (["doc","readme","comment"], "docs"),
+    (["docs","documentation","docstring","readme","comment"], "docs"),
     (["deploy","docker","ci","cd","devops","infra","kubernetes","migration"], "devops"),
     (["database","postgres","sql","clickhouse","supabase"], "database"),
     # bare "design" removed: it's genuinely ambiguous English, not a
@@ -80,30 +114,58 @@ KEYWORD_FALLBACK = [
 # ambiguity, not a boundary problem).
 _WORD_RE_CACHE = {}
 def _word_in_strict(tok, hay):
+    """Word-boundary match. A trailing DIGIT is allowed so a version-suffixed
+    name still resolves — "nuxt4" is Nuxt, "react18" is React — while a
+    trailing letter still blocks, which is the rule that stops "react"
+    matching "reactivity"."""
     rx = _WORD_RE_CACHE.get(tok)
     if rx is None:
-        rx = re.compile(r"(?<![a-z0-9])" + re.escape(tok) + r"(?![a-z0-9])")
+        rx = re.compile(r"(?<![a-z0-9])" + re.escape(tok) + r"(?![a-z])")
         _WORD_RE_CACHE[tok] = rx
     return rx.search(hay) is not None
 
-def category_for(name, desc):
-    hay = (name + " " + desc).lower()
+def _kw_in(kw, hay):
+    return _word_in_strict(kw, hay) if kw in BOUNDED_KEYWORDS else kw in hay
+
+def _lang_of(hay):
     # Longest token first as a second line of defense (e.g. a hypothetical
     # token that's itself a whole word inside a longer compound token) — word
     # boundaries already do most of the real work here.
     for tok in sorted(LANG_TOKENS, key=len, reverse=True):
         if _word_in_strict(tok, hay):
-            norm = tok.replace("c++", "cpp")
-            if norm == "golang":
-                norm = "go"
-            return "language:" + norm
+            return "language:" + LANG_ALIAS.get(tok, tok)
+    return None
+
+def category_for(name, desc):
+    """One principle, applied twice: what a thing is CALLED is evidence about
+    what it is; what its description happens to mention is not.
+
+    The original matched every rule against name+description together, so a
+    single passing mention decided the category. The confirmed case: the
+    `accessibility` skill says it generates ARIA "for Web and Native platforms
+    (iOS/Android)" — an aside about coverage — and was filed under
+    language:android. The same shape hits anything whose description names a
+    platform, a framework or a tool it merely supports.
+
+    So both tiers read the name first. Only when the name says nothing at all
+    does the description get a vote, and a language read out of a description
+    is a last resort, below every role signal — a description mentioning
+    Python is weaker evidence than a description saying the thing is a test
+    harness."""
+    lname = name.lower()
+    hay = lname + " " + desc.lower()
+
+    lang = _lang_of(lname)
+    if lang:
+        return lang
     for suffix, cat in ROLE_SUFFIX:
-        if suffix in name.lower():
+        if suffix in lname:
             return cat
-    for kws, cat in KEYWORD_FALLBACK:
-        if any(k in hay for k in kws):
-            return cat
-    return "general"
+    for haystack in (lname, hay):
+        for kws, cat in KEYWORD_FALLBACK:
+            if any(_kw_in(k, haystack) for k in kws):
+                return cat
+    return _lang_of(hay) or "general"
 
 def read(p):
     try:
@@ -132,14 +194,17 @@ def frontmatter(text):
     return fm, parts[2]
 
 args = sys.argv[1:]
-if len(args) == 1:
-    sources_path, out_path = "sources.json", args[0]
-elif len(args) == 2:
-    sources_path, out_path = args[0], args[1]
-else:
-    print("usage: build-graph.py [sources.json] <output.json>", file=sys.stderr)
+PROJECT_ROOT = os.path.abspath(".")
+if "--project-root" in args:
+    i = args.index("--project-root")
+    PROJECT_ROOT = os.path.abspath(args[i + 1])
+    del args[i:i + 2]
+if len(args) != 2:
+    print("usage: build-graph.py <config.json> <output.json> [--project-root DIR]", file=sys.stderr)
     sys.exit(1)
-ROOTS = load_roots(sources_path)
+config_path, out_path = args
+ROOTS = load_roots(config_path, PROJECT_ROOT)
+os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
 
 nodes = []
 node_by_name = {}  # name -> list of node ids (names can collide across type/repo)
@@ -227,12 +292,11 @@ for n in nodes:
 for c, n in sorted(cat_counts.items(), key=lambda x: -x[1]):
     print(f"  {c}: {n}", file=sys.stderr)
 
-# Absolute path to the repo root on THIS machine, at build time (the
-# directory this script was run from). Node "path" fields above are relative
-# to this. The packaged app can't derive this itself — packaging only
-# bundles neo4j-graph-app/, not the sibling source repos sources.json points
-# at, so __dirname inside the built .app no longer has any relationship to
-# where the real source files live on disk.
-out = {"nodes": nodes, "edges": edges, "sourceRoot": os.path.abspath(".")}
+# Absolute path to the project root on THIS machine, at build time. Node
+# "path" fields above are relative to this. Neither the packaged desktop app
+# nor the MCP server can derive it themselves — both are installed outside the
+# project, so their own __dirname says nothing about where the catalogued
+# source files actually live.
+out = {"nodes": nodes, "edges": edges, "sourceRoot": PROJECT_ROOT}
 with open(out_path, "w") as f:
     json.dump(out, f)

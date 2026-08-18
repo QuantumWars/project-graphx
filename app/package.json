@@ -1,0 +1,16 @@
+{
+  "name": "skill-graph-app",
+  "productName": "Skill Graph",
+  "version": "0.1.0",
+  "description": "Desktop graph explorer for the skill-graph plugin",
+  "main": "src/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-packager . \"Skill Graph\" --platform=darwin --arch=arm64 --out=dist --overwrite"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-packager": "^17.1.2"
+  }
+}

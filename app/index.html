@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
-<title>project-graphx</title>
+<title>Skill Graph</title>
 <link rel="stylesheet" href="src/style.css">
 </head>
 <body>
@@ -47,7 +47,7 @@
         <div id="frameHeader">
           <div class="type-filters" id="typeFilters"></div>
           <span class="frame-tag mono">command</span>
-          <span id="frameQuery" class="mono">MATCH (n) RETURN n</span>
+          <span id="frameQuery" class="mono">all</span>
           <span id="frameResult" class="mono"></span>
           <div class="frame-actions">
             <span id="fps" class="mono"></span>
@@ -77,14 +77,14 @@
 
           <div id="infoPanel" class="floating-panel hidden">
             <div class="fp-title">About this graph</div>
-            <p>Every agent and skill from the repos listed in your <span class="mono">sources.json</span>. Node
-            size = how many others reference it by name (degree). A line means one artifact names the other in
-            its own text — a real "pairs with" signal pulled from the source files, not a guess. Line length =
-            how strongly: counted from how many times the name is actually mentioned, plus extra distance for a
-            line that crosses between categories.</p>
+            <p>Every agent and skill from the sources you configured. Node size = how many
+            others reference it by name (degree). A line means one artifact names the other in its own text —
+            a real "pairs with" signal pulled from the source files, not a guess. Line length = how strongly:
+            counted from how many times the name is actually mentioned, plus extra distance for a line that
+            crosses between categories.</p>
             <p>Categories are heuristically inferred from name + description (language keywords, role suffixes,
-            then topic keywords) — not an official taxonomy from any source repo. See
-            <span class="mono">build-graph.py</span> for the exact rules.</p>
+            then topic keywords) — a guess, not an official taxonomy. Tags you set yourself are
+            authoritative; categories are not.</p>
             <p>The bar above runs real commands against the real data — <span class="mono">path a -&gt; b</span> and
             <span class="mono">best</span> aren't canned answers, they're computed live from the actual reference
             graph each time. <span class="mono">projects X</span> and <span class="mono">project:Y</span> are

@@ -1,19 +1,20 @@
 # dependencies
 node_modules/
-
-# generated graph data — regenerate locally with `npm run regenerate-data`
-neo4j-graph-app/data/*.json
-!neo4j-graph-app/data/.gitkeep
-
-# your own machine-specific source config — copy from sources.example.json
-sources.json
+app/node_modules/
 
 # build output
-neo4j-graph-app/dist/
-neo4j-graph-app/build/
+app/dist/
+app/build/
+
+# generated graph data — rebuild with /skill-graph:build
+app/data/
 
 # repos cloned in by the add_repo MCP tool
 imported-repos/
+
+# this plugin's own session data when Claude Code runs inside this checkout —
+# memory captures transcript content and must never be published
+.claude/
 
 # python
 __pycache__/

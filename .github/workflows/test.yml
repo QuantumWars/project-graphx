@@ -1,0 +1,45 @@
+# The suite's most valuable property is catching a stale server.bundle.mjs.
+# That bundle is a committed build artifact, so an edit under server/ that was
+# never re-bundled ships as a no-op — the repo shows one thing and installs
+# another. The e2e suite launches the bundle exactly as .mcp.json does, and the
+# rebuild step below fails the run if the committed bundle is not what the
+# current sources produce. Neither check is worth much if it depends on someone
+# remembering to run it.
+#
+# The comparison is only possible because `bun run bundle` normalizes the
+# __dirname literal the bundler would otherwise freeze in (see
+# scripts/normalize-bundle.js) — without that, every machine produces different
+# bytes and this step could never pass.
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # python3 is what commands/build.md invokes; the scripts are stdlib-only.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: bun install
+
+      - run: bun test
+
+      - name: the committed bundle must match the sources
+        run: |
+          bun run bundle
+          if ! git diff --quiet -- server/server.bundle.mjs; then
+            echo "server/server.bundle.mjs is stale — run 'bun run bundle' and commit the result." >&2
+            git diff --stat -- server/server.bundle.mjs >&2
+            exit 1
+          fi

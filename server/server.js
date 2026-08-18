@@ -1,19 +1,21 @@
 #!/usr/bin/env node
-// MCP server exposing your catalogued skill+agent graph (built by
-// build-graph.py from the repos listed in sources.json, plus real
-// cross-references and which of your real projects on this machine use
-// what) as tools any Claude Code session can call directly — no GUI, no
-// manual Playwright setup, just stdio.
+// MCP server exposing this project's skill+agent graph — the catalogued
+// items, the real cross-references between them, and the projects on disk
+// that actually have each one installed — as tools any Claude Code session
+// can call directly. No GUI required; plain stdio.
+//
+// The graph itself is per-project and built by /skill-graph:build. Nothing
+// here assumes a particular catalogue, size or source repo.
 const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
 const { StdioServerTransport } = require("@modelcontextprotocol/sdk/server/stdio.js");
 const { z } = require("zod");
 const { execFile } = require("child_process");
 const q = require("./graph-query.js");
-const overlay = require("../graph-overlay.js");
+const overlay = require("./graph-overlay.js");
 const installer = require("./skill-installer.js");
 const repoImporter = require("./repo-importer.js");
 
-const server = new McpServer({ name: "project-graphx", version: "1.0.0" });
+const server = new McpServer({ name: "skill-graph", version: "0.1.0" });
 
 function ok(obj) {
   return { content: [{ type: "text", text: JSON.stringify(obj, null, 2) }] };
@@ -24,9 +26,9 @@ server.registerTool(
   {
     title: "Best skills/agents",
     description:
-      "Rank your catalogue by how many other real files actually reference them — a real, counted signal of importance, not a popularity guess. Optionally filter by type (agent|skill) or raw category (e.g. 'security', 'review', 'language:python').",
+      "Rank this project's catalogued agents and skills by how many other real files actually reference them — a counted signal drawn from the source text, not a popularity guess. Optionally filter by type (agent|skill) or raw category (e.g. 'security', 'review', 'language:python').",
     inputSchema: {
-      n: z.number().int().min(1).max(1000).optional().describe("how many to return, default 15"),
+      n: z.number().int().min(1).optional().describe("how many to return, default 15"),
       type: z.enum(["agent", "skill"]).optional(),
       category: z.string().optional().describe("raw category string or substring, e.g. 'security'"),
     },
@@ -39,7 +41,7 @@ server.registerTool(
   {
     title: "Get skill/agent/project detail",
     description:
-      "Full detail for one node by name (agent, skill, or one of your real scanned projects): description, tools, real file path, what it references, what references it, and — for a project — exactly which catalogued items it actually has installed on disk.",
+      "Full detail for one node by name (an agent, a skill, or one of the scanned projects): description, tools, real file path, what it references, what references it, and — for a project — exactly which catalogued items it has installed on disk.",
     inputSchema: { name: z.string().describe("exact or partial name") },
   },
   async ({ name }) => ok(q.getNodeDetail(q.loadGraph(), name))
@@ -81,7 +83,7 @@ server.registerTool(
   {
     title: "Which real projects use this skill/agent",
     description:
-      "Backed by an actual filesystem scan of every .claude/agents and .claude/skills folder on this machine — not a manifest that can drift. Returns which of your real projects currently have this installed.",
+      "Backed by an actual filesystem scan of every .claude/agents and .claude/skills folder under the configured scan roots — not a manifest that can drift. Returns which of your projects currently have this installed.",
     inputSchema: { name: z.string() },
   },
   async ({ name }) => ok(q.projectsUsing(q.loadGraph(), name))
@@ -91,8 +93,8 @@ server.registerTool(
   "project_installed_skills",
   {
     title: "What a real project has installed",
-    description: "For one of your real scanned projects, list every catalogued agent/skill it actually has in its own .claude/, plus whether it has a CLAUDE.md.",
-    inputSchema: { project: z.string().describe("project label, or a substring of one") },
+    description: "For one scanned project, list every catalogued agent/skill it actually has in its own .claude/, plus whether it has a CLAUDE.md. Call projects_using or get_node first if you need the exact project label.",
+    inputSchema: { project: z.string().describe("project label, e.g. 'Personal/context-management' or a substring like 'context-management'") },
   },
   async ({ project }) => ok(q.projectDetail(q.loadGraph(), project))
 );
@@ -130,7 +132,7 @@ server.registerTool(
   {
     title: "Add a note to a node",
     description:
-      "Attach a persistent text note to any agent/skill/project/CLAUDE.md node — a real write, not a suggestion. Stored in a separate overlay file (neo4j-graph-app/data/overlay.json), NOT in graph-data.json itself, specifically so it survives the next `npm run regenerate-data` re-scan instead of being silently overwritten. Shows up in get_node's `notes` field and in the desktop app's detail panel on next load.",
+      "Attach a persistent text note to any agent/skill/project/CLAUDE.md node — a real write, not a suggestion. Stored in .claude/graph/overlay.json, NOT in graph-data.json itself, specifically so it survives the next /skill-graph:build re-scan instead of being silently overwritten. Shows up in get_node's `notes` field and in the desktop app's detail panel on next load.",
     inputSchema: { name: z.string().describe("node name to attach the note to"), text: z.string() },
   },
   async ({ name, text }) => {
@@ -232,10 +234,10 @@ server.registerTool(
   {
     title: "Install a skill/agent into a real project",
     description:
-      "Copies a skill or agent's REAL files from its source repo into one of your scanned real projects' own .claude/ folder (agents/<name>.md, or skills/<name>/ for a whole skill directory). This is a genuine filesystem write to a project outside this repo — never to the source repo itself, which stays read-only. After copying, automatically re-scans so usedBy/usesCount reflect the install immediately. Fails cleanly (no partial write) if already installed there.",
+      "Copies a catalogued skill or agent's REAL files into a scanned project's own .claude/ folder (agents/<name>.md, or skills/<name>/ for a whole skill directory). A genuine filesystem write to the destination project only — the catalogued source tree is read-only and never modified. After copying, automatically re-scans so usedBy/usesCount reflect the install immediately. Fails cleanly (no partial write) if already installed there.",
     inputSchema: {
       name: z.string().describe("skill or agent name"),
-      project: z.string().describe("project label, or a substring — must match one of the scanned real projects"),
+      project: z.string().describe("project label, e.g. 'context-management' or a substring — must match one of the scanned real projects"),
     },
   },
   async ({ name, project }) => {
@@ -249,7 +251,7 @@ server.registerTool(
   {
     title: "Remove an installed skill/agent from a real project",
     description:
-      "Deletes a skill/agent's real files from a project's own .claude/ folder — a genuine, irreversible filesystem delete (recursive for a skill directory). Only ever touches the target project, never the source repo. Re-scans automatically afterward so the graph reflects the removal immediately. Fails cleanly if it isn't actually installed there.",
+      "Deletes a skill/agent's real files from a project's own .claude/ folder — a genuine, irreversible filesystem delete (recursive for a skill directory). Only ever touches the target project, never the catalogued source tree. Re-scans automatically afterward so the graph reflects the removal immediately. Fails cleanly if it isn't actually installed there.",
     inputSchema: {
       name: z.string().describe("skill or agent name"),
       project: z.string().describe("project label — must match one of the scanned real projects"),
@@ -266,7 +268,7 @@ server.registerTool(
   {
     title: "Add skills/agents from any external repo",
     description:
-      "Extracts every .claude/skills/*/SKILL.md and .claude/agents/*.md from any repo (GitHub URL — clones it shallowly — or a local path) into this catalog. Extraction is frontmatter-only (name/description/tools), same parser as the sources.json-driven build-graph.py pipeline. New nodes start with ZERO real connections — cross-references aren't auto-computed for imports, unlike the sources.json repos which get a full body-text scan. Use add_custom_edge afterward to link an import to related catalog items you notice. Stored in the durable overlay, so re-scanning (regenerate-data) never removes it — only remove_repo does. Fails cleanly if the repo has no .claude/skills or .claude/agents at all.",
+      "Extracts every .claude/skills/*/SKILL.md and .claude/agents/*.md from any repo (GitHub URL — clones it shallowly into .claude/graph/imported-repos/ — or a local path) into this catalog. Extraction is frontmatter-only (name/description/tools), the same parser the build pipeline uses. New nodes start with ZERO real connections — cross-references are not auto-computed for imports, unlike configured sources which get a full body-text scan. Use add_custom_edge afterward to link an import to related catalog items you notice. Stored in the durable overlay, so /skill-graph:build never removes it — only remove_repo does. Fails cleanly if the repo has no .claude/skills or .claude/agents at all.",
     inputSchema: {
       source: z.string().describe("a GitHub URL (https://... or git@...) or a local filesystem path"),
     },
@@ -415,8 +417,18 @@ server.registerTool(
     const n = r.node;
     const path = require("path");
     const abs = path.isAbsolute(n.path) ? n.path : path.join(g.data.sourceRoot || "", n.path);
+    // Each platform's own file-manager reveal. Anything else gets the real
+    // path back and an honest statement that revealing isn't wired there,
+    // rather than an ENOENT from a command that was never going to exist.
+    const REVEAL = {
+      darwin: ["open", ["-R", abs]],
+      win32: ["explorer", [`/select,${abs}`]],
+      linux: ["xdg-open", [require("path").dirname(abs)]],
+    };
+    const cmd = REVEAL[process.platform];
+    if (!cmd) return ok({ ok: false, path: abs, error: `revealing a file is not supported on ${process.platform}` });
     return new Promise((resolve) => {
-      execFile("open", ["-R", abs], (err) => {
+      execFile(cmd[0], cmd[1], (err) => {
         resolve(ok(err ? { ok: false, error: String(err), path: abs } : { ok: true, path: abs }));
       });
     });

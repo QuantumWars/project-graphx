@@ -5,11 +5,24 @@
 // semantics in sync if either changes.
 const fs = require("fs");
 const path = require("path");
-const overlay = require("../graph-overlay.js");
+const overlay = require("./graph-overlay.js");
+const paths = require("./paths.js");
 
-const DATA_PATH = path.join(__dirname, "..", "neo4j-graph-app", "data", "graph-data.json");
+// A project that has never run the build has no graph-data.json. That is the
+// ordinary first-run state, not a fault, and it must not surface as a raw
+// ENOENT stack trace from deep inside a tool call — the caller needs to be
+// told which file is missing and which command creates it.
+class GraphNotBuiltError extends Error {
+  constructor(dataPath) {
+    super(`No graph found at ${dataPath}. Run /skill-graph:build to create one (or /skill-graph:setup first if this project has no config.json yet).`);
+    this.name = "GraphNotBuiltError";
+    this.dataPath = dataPath;
+  }
+}
 
 function loadGraph() {
+  const DATA_PATH = paths.dataPath();
+  if (!fs.existsSync(DATA_PATH)) throw new GraphNotBuiltError(DATA_PATH);
   const data = overlay.applyOverlay(JSON.parse(fs.readFileSync(DATA_PATH, "utf-8")));
   const byId = new Map(data.nodes.map((n) => [n.id, n]));
   const byName = new Map();
@@ -176,19 +189,59 @@ function getNodeDetail(g, name) {
 // tier, real graph degree (how much this thing is actually referenced) plus
 // your own rating (if you've rated it) break ties, so a well-known or
 // well-rated skill outranks an obscure one with the same text match quality.
+// How well one node matches one search term. Exact name beats prefix beats
+// substring beats a description mention beats a category mention.
+function termTier(x, term) {
+  const name = x.name.toLowerCase();
+  if (name === term) return 100;
+  if (name.startsWith(term)) return 80;
+  if (name.includes(term)) return 60;
+  if ((x.description || "").toLowerCase().includes(term)) return 30;
+  if (x.category.toLowerCase().includes(term)) return 15;
+  return 0;
+}
+
+// Words too common to carry signal. Dropped only when other words remain, so
+// a deliberate search for one of them still works.
+const STOPWORDS = new Set(["a", "an", "the", "and", "or", "for", "of", "to", "in", "on", "with", "my", "me", "is", "it"]);
+
 function searchRanked(g, text, n = 15) {
   const q = text.trim().toLowerCase();
   if (!q) return { query: text, results: [] };
+
+  // The original scored the query as ONE substring, so any multi-word search
+  // — which is what a person describing a need actually types — matched
+  // nothing at all, because "python security review" is not a literal
+  // substring of any name or description. Multi-word queries are now scored
+  // per word and combined.
+  //
+  // A single-word query takes the original path untouched: its tier, and so
+  // its ranking against degree and rating, is exactly what it was before.
+  const all = q.split(/\s+/).filter(Boolean);
+  const meaningful = all.filter((t) => !STOPWORDS.has(t));
+  const terms = meaningful.length ? meaningful : all;
+
   const results = [];
   g.data.nodes.forEach((x) => {
     if (x.type === "project" || x.type === "claudemd") return;
-    const name = x.name.toLowerCase();
-    let tier = 0;
-    if (name === q) tier = 100;
-    else if (name.startsWith(q)) tier = 80;
-    else if (name.includes(q)) tier = 60;
-    else if ((x.description || "").toLowerCase().includes(q)) tier = 30;
-    else if (x.category.toLowerCase().includes(q)) tier = 15;
+
+    let tier;
+    if (terms.length === 1) {
+      tier = termTier(x, terms[0]);
+    } else {
+      // Scored on average strength, then scaled by how many of the words hit
+      // at all: matching every word weakly beats matching one word strongly
+      // and ignoring the rest. A literal phrase hit is added on top, so an
+      // exact multi-word name still outranks a scattered match.
+      let sum = 0, matched = 0;
+      for (const t of terms) {
+        const s = termTier(x, t);
+        if (s > 0) { sum += s; matched++; }
+      }
+      const phrase = termTier(x, q);
+      if (matched === 0 && phrase === 0) return;
+      tier = phrase + (sum / terms.length) * (matched / terms.length);
+    }
     if (tier === 0) return;
     const ratingBoost = x.avgRating ? (x.avgRating - 3) * 4 : 0; // -8..+8, centered on a neutral 3-star
     const score = tier + Math.min(g.degree.get(x.id) || 0, 20) + ratingBoost;
@@ -294,5 +347,6 @@ function getFileSet(g, { type, categories, tags, tagMode, text } = {}) {
 module.exports = {
   loadGraph, resolveNode, best, neighbors, findPath, projectsUsing, projectDetail, find, getNodeDetail, listCategories,
   listTags, getFileSet,
-  searchRanked, relatedByConnections, DATA_PATH,
+  searchRanked, relatedByConnections,
+  dataPath: paths.dataPath, GraphNotBuiltError,
 };

@@ -1,0 +1,21 @@
+{
+  "name": "skill-graph",
+  "metadata": {
+    "description": "Your Claude Code skills and agents as a queryable graph, per project."
+  },
+  "owner": {
+    "name": "subha"
+  },
+  "plugins": [
+    {
+      "name": "skill-graph",
+      "description": "Catalogue the skills and agents you have, count what references what, scan your projects for what is really installed, and query it all from a session. Optional desktop graph explorer.",
+      "author": {
+        "name": "subha"
+      },
+      "source": "./",
+      "category": "productivity",
+      "version": "0.1.0"
+    }
+  ]
+}

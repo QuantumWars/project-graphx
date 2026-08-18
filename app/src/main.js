@@ -2,18 +2,42 @@ const { app, BrowserWindow, Menu, shell, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 
-const dataPath = path.join(__dirname, "..", "data", "graph-data.json");
-const overlayPath = path.join(__dirname, "..", "data", "overlay.json");
-// Mirrors ../../graph-overlay.js's applyOverlay() — duplicated inline
-// rather than required, because electron-packager only bundles
-// neo4j-graph-app/ itself into the .app; graph-overlay.js lives one level up
-// (a sibling shared with graph-mcp-server, which is never packaged and can
-// require it directly). A cross-boundary require() here throws
-// "Cannot find module" in the packaged app specifically — it worked in dev
-// only because dev mode runs from the real, unpackaged source tree where
-// that file actually exists at the expected relative path. Keep this in
-// sync with graph-overlay.js's applyOverlay() and web-shim.js's copy if
-// either changes.
+// The viewer is installed with the plugin; the data belongs to a project.
+// So the data directory is told to us, never derived from __dirname — the
+// packaged .app can sit anywhere and still open any project's graph.
+//
+//   GRAPH_DATA_DIR=<dir>   env var, or
+//   --data-dir <dir>       argv.
+//
+// There is deliberately no third fallback. This used to default to the app's
+// own ../data folder, which looked harmless — the window just came up empty —
+// but ratings and notes clicked from that state were written into the plugin
+// install directory, where the MCP server never looks and a reinstall wipes
+// them. Silent writes to a location nothing reads are worse than not starting,
+// so a missing data directory is now a refusal with the fix in it.
+function resolveDataDir() {
+  const flag = process.argv.indexOf("--data-dir");
+  if (flag !== -1 && process.argv[flag + 1]) return path.resolve(process.argv[flag + 1]);
+  if (process.env.GRAPH_DATA_DIR) return path.resolve(process.env.GRAPH_DATA_DIR);
+  console.error("No data directory given. Pass --data-dir <project>/.claude/graph or set GRAPH_DATA_DIR.");
+  console.error("Run /skill-graph:app, which supplies it, rather than launching this app directly.");
+  process.exit(1);
+}
+
+const DATA_DIR = resolveDataDir();
+const dataPath = path.join(DATA_DIR, "graph-data.json");
+const overlayPath = path.join(DATA_DIR, "overlay.json");
+// Mirrors server/graph-overlay.js's applyOverlay() — duplicated inline rather
+// than required, because electron-packager only bundles app/ itself into the
+// .app; graph-overlay.js lives in server/, outside that boundary. A
+// cross-boundary require() here throws "Cannot find module" in the packaged
+// app specifically — it works in dev only because dev mode runs from the
+// unpackaged source tree where that file exists at the expected relative
+// path. Keep this in sync with graph-overlay.js's applyOverlay() if it
+// changes. web-shim.js used to carry a third copy; it no longer does — browser
+// mode gets already-merged data from server/viewer-server.js, which calls
+// applyOverlay() directly. This inline copy is the last one, and it exists
+// only because of the packaging boundary described above.
 function loadOverlay() {
   if (!fs.existsSync(overlayPath)) return { notes: {}, customEdges: [], ratings: {}, importedNodes: [], categoryOverrides: {}, tags: {} };
   try {
@@ -37,7 +61,7 @@ function loadOverlay() {
 // still opens and can show real setup instructions instead of a blank
 // Electron error screen.
 const graphData = (() => {
-  if (!fs.existsSync(dataPath)) return { nodes: [], edges: [], sourceRoot: "", empty: true };
+  if (!fs.existsSync(dataPath)) return { nodes: [], edges: [], sourceRoot: "", empty: true, dataDir: DATA_DIR };
   const data = JSON.parse(fs.readFileSync(dataPath, "utf-8"));
   const overlay = loadOverlay();
   data.nodes.push(...overlay.importedNodes);
@@ -64,8 +88,10 @@ ipcMain.handle("load-graph", () => graphData);
 // rating/note added here shows up in get_node from any Claude Code session
 // too. Inline read+write (not required from graph-overlay.js) for the same
 // packaging-boundary reason loadOverlay() above is inlined: electron-packager
-// only bundles neo4j-graph-app/ itself, and graph-overlay.js lives one level
-// up. Keep in sync with graph-overlay.js's addRating/addNote if either changes.
+// only bundles app/ itself, and graph-overlay.js lives in server/, outside
+// that boundary. Keep in sync with graph-overlay.js's addRating/addNote if
+// either changes. (Browser mode has no such boundary — server/viewer-server.js
+// calls those functions directly, which is why it carries no copy.)
 function loadOverlayRaw() {
   if (!fs.existsSync(overlayPath)) return { notes: {}, customEdges: [], ratings: {}, importedRepos: [], importedNodes: [], categoryOverrides: {}, tags: {} };
   try {
@@ -109,18 +135,17 @@ ipcMain.handle("add-note", (event, nodeId, text) => {
   return { ok: true, notes: raw.notes[nodeId] };
 });
 
-// Skill/agent node.path values are relative to the repo root build-graph.py
-// was run from — resolve against sourceRoot, recorded by build-graph.py at
-// build time, NOT against this app's own __dirname. Packaging only bundles
-// neo4j-graph-app/ itself; the real source repos listed in sources.json stay
-// wherever they were on disk, outside the .app bundle, so a bundle-relative
-// path can never find them (confirmed: this broke exactly that way on first
-// packaged-app test).
-// Project node.path values are already absolute (scan-project-usage.py
-// records each project's own real location directly, since those live
-// outside the source repos entirely — sourceRoot-relative resolution would
-// be wrong for them by construction) and point at a directory, not a file,
-// so they open with openPath rather than showItemInFolder.
+// Skill/agent node.path values are relative to the source root — resolve
+// against sourceRoot, recorded by build-graph.py at the time it ran, NOT
+// against this app's own __dirname. Packaging only bundles app/ itself; the
+// catalogued source files stay wherever they were on disk, outside the .app
+// bundle, so a bundle-relative path can never find them (confirmed: this broke
+// exactly that way on first packaged-app test).
+// Project node.path values are already absolute (scan-project-usage.py records
+// each project's own real location directly, since those live outside the
+// source root entirely — sourceRoot-relative resolution would be wrong for
+// them by construction) and point at a directory, not a file, so
+// they open with openPath rather than showItemInFolder.
 ipcMain.handle("reveal-file", (event, relPath) => {
   const abs = path.isAbsolute(relPath) ? relPath : path.join(graphData.sourceRoot || "", relPath);
   if (!fs.existsSync(abs)) return { ok: false, reason: `not found: ${abs}` };
@@ -193,8 +218,8 @@ const menuTemplate = [
     label: "Help",
     submenu: [
       {
-        label: "View README",
-        click: () => shell.openPath(path.join(__dirname, "..", "..", "README.md")),
+        label: "Open the graph data folder",
+        click: () => shell.openPath(DATA_DIR),
       },
     ],
   },

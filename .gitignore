@@ -12,6 +12,12 @@ app/data/
 # repos cloned in by the add_repo MCP tool
 imported-repos/
 
+# build output left behind by the pre-plugin layout. The directory is no
+# longer tracked, but an Electron install, a dist/ and a .dmg can still be
+# sitting in a working copy from before the move — ignored so a later
+# `git add -A` cannot commit hundreds of megabytes of it.
+neo4j-graph-app/
+
 # this plugin's own session data when Claude Code runs inside this checkout —
 # memory captures transcript content and must never be published
 .claude/

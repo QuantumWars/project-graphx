@@ -13,6 +13,10 @@ import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { execFileSync, spawn } from "child_process";
 
+// The same interpreter the server itself resolves, so the fixture build cannot
+// succeed on a machine where the shipped code would fail, or vice versa.
+const PY = require(resolve(import.meta.dir, "..", "server", "paths.js")).pythonBin();
+
 const PLUGIN = resolve(import.meta.dir, "..");
 const BUNDLE = join(PLUGIN, "server", "server.bundle.mjs");
 
@@ -21,13 +25,15 @@ let workspace, project, graphDir, server, rpc;
 // --- a minimal MCP stdio client -------------------------------------------
 // Framed by newline-delimited JSON, which is what StdioServerTransport speaks.
 // GRAPH_DATA_DIR is blanked before `env` is applied, and that is load-bearing.
-// It beats GRAPH_PROJECT_DIR when the data directory is resolved, so a developer
-// who has followed /skill-graph:setup-global — the shared-catalogue setup this
-// plugin ships — inherits it into the spawned server, and every test below then
-// reads their own real graph instead of the fixture.
+// It overrides GRAPH_PROJECT_DIR when resolving the data directory, so a
+// developer who has followed /skill-graph:setup-global — the shared-catalogue
+// setup this plugin ships — inherits it into the spawned server and every test
+// below silently reads their own real graph instead of the fixture. The suite
+// then passes or fails according to whose machine it is on, and these tests
+// write into whatever that machine's graph points at.
 //
-// A caller that genuinely wants it set passes it in `env` and wins, because the
-// spread comes second.
+// A caller that genuinely wants it set passes it in `env` and wins, because
+// the spread comes second.
 function connect(command, args, env) {
   const clean = { ...process.env, GRAPH_DATA_DIR: "", ...env };
   const proc = spawn(command, args, { env: clean, stdio: ["pipe", "pipe", "pipe"] });
@@ -101,6 +107,15 @@ beforeAll(async () => {
   mkdirSync(join(consumer, ".claude", "skills"), { recursive: true });
   skill(join(consumer, ".claude", "skills"), "threat-modelling", "installed copy");
 
+  // Two projects that exist to be installed INTO. They hold a .claude with a
+  // settings.json and nothing else, which is what makes them projects the scan
+  // discovers — and it is also the realistic shape: .claude already exists, but
+  // .claude/skills does not until an install creates it.
+  for (const name of ["fresh-consumer", "two-skill-consumer"]) {
+    mkdirSync(join(workspace, name, ".claude"), { recursive: true });
+    writeFileSync(join(workspace, name, ".claude", "settings.json"), "{}\n");
+  }
+
   graphDir = join(project, ".claude", "graph");
   mkdirSync(graphDir, { recursive: true });
   writeFileSync(join(graphDir, "config.json"), JSON.stringify({
@@ -113,14 +128,14 @@ beforeAll(async () => {
   }, null, 2));
 
   // The build, run exactly as commands/build.md documents it.
-  execFileSync("python3", [
+  execFileSync(PY.cmd, [...PY.args,
     join(PLUGIN, "scripts", "build-graph.py"),
     join(graphDir, "config.json"),
     join(graphDir, "graph-data.json"),
     "--project-root", project,
   ], { cwd: project, stdio: "pipe" });
 
-  execFileSync("python3", [
+  execFileSync(PY.cmd, [...PY.args,
     join(PLUGIN, "scripts", "scan-project-usage.py"),
     join(graphDir, "graph-data.json"),
     "--config", join(graphDir, "config.json"),
@@ -237,7 +252,7 @@ test("a write lands in the project's overlay and survives a rebuild", async () =
 
   // graph-data.json is regenerated wholesale; the overlay is the only reason
   // a note is not destroyed by the next build.
-  execFileSync("python3", [
+  execFileSync(PY.cmd, [...PY.args,
     join(PLUGIN, "scripts", "build-graph.py"),
     join(graphDir, "config.json"), join(graphDir, "graph-data.json"),
     "--project-root", project,
@@ -280,15 +295,68 @@ test("a query of only stopwords does not silently match everything", async () =>
   expect(out.results.length).toBe(0);
 });
 
+// --- install and uninstall really touch the disk ---------------------------
+// These go through the shipped server, not the module, because the defect they
+// cover was invisible from either side alone: the module deleted what it was
+// asked to delete, and the tool reported ok, while the directory it had created
+// stayed behind. Only looking at the filesystem afterwards shows it.
+
+// build-graph.py regenerates graph-data.json wholesale, so the rebuild in the
+// overlay test above drops the project nodes the scan had added. That is why
+// commands/build.md always runs the two scripts as a pair; here the pair has
+// been split across tests, so the scan is re-run before anything needs a
+// project to exist.
+function rescanFixture() {
+  execFileSync(PY.cmd, [...PY.args,
+    join(PLUGIN, "scripts", "scan-project-usage.py"),
+    join(graphDir, "graph-data.json"),
+    "--config", join(graphDir, "config.json"),
+    "--project-root", project,
+  ], { cwd: project, stdio: "pipe" });
+}
+
+test("installing writes the real files into the target project", async () => {
+  rescanFixture();
+  const target = join(workspace, "fresh-consumer");
+  expect(existsSync(join(target, ".claude", "skills"))).toBe(false); // the install must create it
+
+  const r = unwrap(await rpc("tools/call", { name: "install_skill", arguments: { name: "secure-defaults", project: "fresh-consumer" } }));
+  expect(r.ok).toBe(true);
+  expect(existsSync(join(target, ".claude", "skills", "secure-defaults", "SKILL.md"))).toBe(true);
+});
+
+test("uninstalling removes the directory the install created, not just the skill", async () => {
+  const target = join(workspace, "fresh-consumer");
+  const r = unwrap(await rpc("tools/call", { name: "uninstall_skill", arguments: { name: "secure-defaults", project: "fresh-consumer" } }));
+  expect(r.ok).toBe(true);
+  expect(existsSync(join(target, ".claude", "skills", "secure-defaults"))).toBe(false);
+  // The part that regressed. An empty .claude/skills is invisible to git, so
+  // nothing downstream would ever have reported it.
+  expect(existsSync(join(target, ".claude", "skills"))).toBe(false);
+  // And it stops there: .claude still holds settings.json, so it is not ours.
+  expect(existsSync(join(target, ".claude", "settings.json"))).toBe(true);
+});
+
+test("a directory holding another skill survives the uninstall", async () => {
+  const target = join(workspace, "two-skill-consumer");
+  unwrap(await rpc("tools/call", { name: "install_skill", arguments: { name: "secure-defaults", project: "two-skill-consumer" } }));
+  unwrap(await rpc("tools/call", { name: "install_skill", arguments: { name: "threat-modelling", project: "two-skill-consumer" } }));
+  unwrap(await rpc("tools/call", { name: "uninstall_skill", arguments: { name: "secure-defaults", project: "two-skill-consumer" } }));
+
+  expect(existsSync(join(target, ".claude", "skills", "secure-defaults"))).toBe(false);
+  expect(existsSync(join(target, ".claude", "skills", "threat-modelling", "SKILL.md"))).toBe(true);
+  expect(existsSync(join(target, ".claude", "skills"))).toBe(true);
+});
+
 // --- the harness itself ----------------------------------------------------
 
 test("the fixture server reads the fixture graph, not the developer's own", () => {
-  // Regression guard for a leak that made this whole file's verdict depend on
-  // whose machine ran it. It is asserted on the harness rather than on any one
-  // symptom, because each symptom was a different test failing for a reason
-  // that named nothing.
+  // Regression guard for a leak that made this whole file's result depend on
+  // whether the person running it had GRAPH_DATA_DIR set. It is asserted on
+  // the harness rather than on a symptom, because every symptom was a
+  // different test failing for a reason that named nothing.
   const seen = connect("node", [BUNDLE], { GRAPH_PROJECT_DIR: project, CLAUDE_PLUGIN_ROOT: PLUGIN });
   seen.proc.kill();
+  expect(process.env.GRAPH_DATA_DIR ?? "").not.toBe(graphDir); // the leak would be invisible if these matched by luck
   expect(existsSync(join(graphDir, "graph-data.json"))).toBe(true);
-  expect(process.env.GRAPH_DATA_DIR ?? "").not.toBe(graphDir);
 });

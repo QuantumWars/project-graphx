@@ -37,10 +37,57 @@ function installPathFor(node, projectPath) {
 // The scanner is a plugin-owned script but writes a project-owned file, so it
 // is addressed absolutely on both sides — there is no working directory from
 // which both are reachable by a relative path.
+//
+// The interpreter is whatever paths.pythonBin() found, not the literal
+// "python3": that name does not exist on a normal Windows install, and this
+// was the whole of the platform dependency.
 function rescan() {
-  execFileSync("python3", [paths.scanScript(), paths.dataPath(), "--config", paths.configPath(), "--project-root", paths.projectRoot()], {
+  const py = paths.pythonBin();
+  if (!py) throw new Error(noPythonMessage());
+  execFileSync(py.cmd, [...py.args, paths.scanScript(), paths.dataPath(), "--config", paths.configPath(), "--project-root", paths.projectRoot()], {
     cwd: paths.projectRoot(),
+    windowsHide: true,
   });
+}
+
+const noPythonMessage = () =>
+  `no Python 3 interpreter found (tried: ${paths.pythonTried()}). The usage scan needs one; install Python 3 or put it on PATH.`;
+
+// Directories the install created and this uninstall has just emptied — the
+// .claude/skills (or .claude/agents) folder, and .claude itself. Left behind,
+// they are litter in someone else's repository that no diff will ever show,
+// because git does not track an empty directory.
+//
+// Emptiness is decided by reading the directory, never by catching rmdir's
+// error: a non-empty rmdir reports ENOTEMPTY on POSIX but can report EPERM on
+// Windows, so a fix written around the error code would behave differently on
+// the two platforms. A directory listing means the same thing everywhere.
+//
+// Two hard limits. It stops at the project root, so it can never walk up into
+// a parent repository. And it stops at the first directory that still holds
+// anything, so a project with a second installed skill keeps its folder.
+//
+// Best effort throughout: failing to remove an empty directory is untidy,
+// while failing the uninstall over it would be wrong.
+function pruneEmptyParents(startPath, projectPath) {
+  let dir = path.dirname(startPath);
+  while (isInside(projectPath, dir)) {
+    try {
+      if (fs.readdirSync(dir).length > 0) return;
+      fs.rmdirSync(dir);
+    } catch {
+      return;
+    }
+    dir = path.dirname(dir);
+  }
+}
+
+// Strictly below `parent`. path.relative is the portable containment test: a
+// string prefix comparison would separate on the wrong character on Windows,
+// and would also call /a/bc a child of /a/b.
+function isInside(parent, dir) {
+  const rel = path.relative(parent, dir);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
 function installSkill(g, q, skillName, projectLabel) {
@@ -62,13 +109,30 @@ function installSkill(g, q, skillName, projectLabel) {
   const destAbs = installPathFor(node, proj.path);
   if (fs.existsSync(destAbs)) return { error: `already installed at ${destAbs}` };
 
+  // Checked before the first write, not after the copy. The scan is not
+  // optional decoration — without it the graph disagrees with the disk — so an
+  // install that cannot finish must not start. Doing this afterwards is what
+  // left a half-applied state on every machine without a `python3`.
+  if (!paths.pythonBin()) return { error: noPythonMessage() };
+
   fs.mkdirSync(path.dirname(destAbs), { recursive: true });
   if (node.type === "agent") {
     fs.copyFileSync(srcAbs, destAbs);
   } else {
     fs.cpSync(path.dirname(srcAbs), destAbs, { recursive: true });
   }
-  rescan();
+
+  // The interpreter existed a moment ago, so this is the scan itself failing.
+  // Undoing the copy is possible precisely because we refused to start when
+  // destAbs already existed: everything at that path is ours to remove, and
+  // removing it puts the project back exactly where it was.
+  try {
+    rescan();
+  } catch (e) {
+    fs.rmSync(destAbs, { recursive: true, force: true });
+    pruneEmptyParents(destAbs, proj.path);
+    return { error: `installed files were removed again: the usage scan failed (${e.message})` };
+  }
   return { ok: true, installed: node.name, type: node.type, project: proj.name, at: destAbs };
 }
 
@@ -86,8 +150,17 @@ function uninstallSkill(g, q, skillName, projectLabel) {
   if (!fs.existsSync(targetAbs)) return { error: `not installed at ${targetAbs}` };
 
   fs.rmSync(targetAbs, { recursive: true, force: true });
-  rescan();
+  pruneEmptyParents(targetAbs, proj.path);
+
+  // A delete cannot be rolled back, so unlike install this reports rather than
+  // repairs. The files really are gone; it is only the graph that is now stale,
+  // and saying so beats an exception that makes the removal look like it failed.
+  try {
+    rescan();
+  } catch (e) {
+    return { ok: true, removed: node.name, type: node.type, project: proj.name, from: targetAbs, warning: `removed, but the usage scan failed, so the graph is stale until the next build (${e.message})` };
+  }
   return { ok: true, removed: node.name, type: node.type, project: proj.name, from: targetAbs };
 }
 
-module.exports = { installSkill, uninstallSkill, resolveProject, installPathFor };
+module.exports = { installSkill, uninstallSkill, resolveProject, installPathFor, pruneEmptyParents };

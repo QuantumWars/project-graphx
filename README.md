@@ -44,16 +44,22 @@ instead, at the cost of a one-time ~280 MB Electron install.
 | For | You need | Notes |
 | --- | --- | --- |
 | The MCP tools | `node` 18+ | The server ships pre-bundled. No `npm install`. |
-| `/skill-graph:build` | `python3` 3.6+ | Standard library only. On macOS this comes with the Xcode command line tools. |
+| `install_skill` / `uninstall_skill` | Python 3.6+ | For the usage re-scan. Located by probing `python3`, then `python`, then `py -3`. |
+| `/skill-graph:build` | `python3` 3.6+ | Standard library only, but the command names `python3` literally. On macOS it comes with the Xcode command line tools. |
 | `/skill-graph:view` | nothing more | Same `node` as above. |
 | `add_repo` | `git` | Only for importing an external repo's skills. |
 | `/skill-graph:app` | `npm` + ~280 MB | One-time Electron install, on first launch only. Optional. |
 | Running the tests | `bun` | Contributors only. |
 
-**Windows is not supported for `/skill-graph:build`.** The build commands invoke `python3`,
-which Windows Python installs do not usually provide (it is `python` or `py`). `install_skill`
-has the same dependency and fails *after* copying files, so it can leave a half-applied
-state. WSL works.
+**On Windows, the MCP tools work; the two slash commands do not.** `install_skill` and
+`uninstall_skill` find the interpreter by probing `python3`, then `python`, then `py -3`, so
+they run on a stock Windows Python. `install_skill` also checks for it *before* it copies
+anything, and undoes the copy if the usage scan fails afterwards — either way the project is
+left as it was found, never half-applied.
+
+`/skill-graph:build` and `/skill-graph:setup-global` are shell snippets that still say
+`python3` literally, so on Windows run their two scripts by hand with whichever name works,
+or use WSL.
 
 The desktop app's packaging script targets **macOS arm64 only**. On other platforms use
 `/skill-graph:view`, or run it unpackaged with `npm start` from `app/`.

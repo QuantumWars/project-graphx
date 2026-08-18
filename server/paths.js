@@ -15,6 +15,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { execFileSync } = require("child_process");
 
 // --- plugin root -----------------------------------------------------------
 // CLAUDE_PLUGIN_ROOT is set by Claude Code when it launches a plugin's MCP
@@ -103,6 +104,50 @@ function ensureDataDir() {
   return dataDir();
 }
 
+// --- python interpreter ----------------------------------------------------
+// The usage scanner is a Python 3 script, and the name of the interpreter is
+// not the same everywhere. `python3` is correct on macOS and most Linux; a
+// Windows install usually provides `python` and the `py` launcher instead and
+// no `python3` at all. So the name is probed rather than assumed.
+//
+// The probe insists on major version 3. A machine where `python` is still
+// Python 2 would otherwise pass a bare existence check and then fail inside
+// the scanner on syntax, which reads as a broken plugin rather than a missing
+// dependency.
+//
+// Probed once per process. The answer cannot change while we run, and every
+// install would otherwise pay for up to three process spawns.
+const PYTHON_CANDIDATES = [
+  { cmd: "python3", args: [] },
+  { cmd: "python", args: [] },
+  { cmd: "py", args: ["-3"] }, // the Windows launcher, which has no `python3`
+];
+
+const PYTHON_PROBE = "import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)";
+
+let pythonCached; // undefined = never probed; null = probed, nothing usable
+
+function pythonBin() {
+  if (pythonCached !== undefined) return pythonCached;
+  for (const c of PYTHON_CANDIDATES) {
+    try {
+      execFileSync(c.cmd, [...c.args, "-c", PYTHON_PROBE], { stdio: "ignore", windowsHide: true });
+      pythonCached = c;
+      return pythonCached;
+    } catch {
+      // Absent (ENOENT) or present but Python 2 (exit 1). Both mean "not this
+      // one" and neither is worth reporting on its own — only the exhaustion
+      // of every candidate is an error, and the caller raises that.
+    }
+  }
+  pythonCached = null;
+  return null;
+}
+
+// The names tried, for an error message that tells someone what to install
+// rather than just that something was missing.
+const pythonTried = () => PYTHON_CANDIDATES.map((c) => [c.cmd, ...c.args].join(" ")).join(", ");
+
 // --- config ----------------------------------------------------------------
 // `sources` says which trees hold agents and skills to catalogue. `scanRoots`
 // says where to look for projects that might have installed them. Both are
@@ -148,5 +193,6 @@ module.exports = {
   pluginRoot, projectRoot, dataDir, ensureDataDir,
   dataPath, overlayPath, configPath, importRoot,
   buildScript, scanScript, appDir,
+  pythonBin, pythonTried,
   loadConfig, saveConfig, DEFAULT_CONFIG,
 };

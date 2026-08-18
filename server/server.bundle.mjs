@@ -34308,6 +34308,7 @@ var require_paths = __commonJS((exports, module) => {
   var fs = __require("fs");
   var path = __require("path");
   var os = __require("os");
+  var { execFileSync } = __require("child_process");
   var PLUGIN_MARKER = path.join(".claude-plugin", "plugin.json");
   function pluginRoot() {
     if (process.env.CLAUDE_PLUGIN_ROOT)
@@ -34352,6 +34353,27 @@ var require_paths = __commonJS((exports, module) => {
     fs.mkdirSync(dataDir(), { recursive: true });
     return dataDir();
   }
+  var PYTHON_CANDIDATES = [
+    { cmd: "python3", args: [] },
+    { cmd: "python", args: [] },
+    { cmd: "py", args: ["-3"] }
+  ];
+  var PYTHON_PROBE = "import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)";
+  var pythonCached;
+  function pythonBin() {
+    if (pythonCached !== undefined)
+      return pythonCached;
+    for (const c of PYTHON_CANDIDATES) {
+      try {
+        execFileSync(c.cmd, [...c.args, "-c", PYTHON_PROBE], { stdio: "ignore", windowsHide: true });
+        pythonCached = c;
+        return pythonCached;
+      } catch {}
+    }
+    pythonCached = null;
+    return null;
+  }
+  var pythonTried = () => PYTHON_CANDIDATES.map((c) => [c.cmd, ...c.args].join(" ")).join(", ");
   var DEFAULT_CONFIG = {
     sources: [],
     scanRoots: [],
@@ -34392,6 +34414,8 @@ var require_paths = __commonJS((exports, module) => {
     buildScript,
     scanScript,
     appDir,
+    pythonBin,
+    pythonTried,
     loadConfig,
     saveConfig,
     DEFAULT_CONFIG
@@ -34960,9 +34984,31 @@ var require_skill_installer = __commonJS((exports, module) => {
     return path.join(projectPath, ".claude", "skills", skillDirName);
   }
   function rescan() {
-    execFileSync("python3", [paths.scanScript(), paths.dataPath(), "--config", paths.configPath(), "--project-root", paths.projectRoot()], {
-      cwd: paths.projectRoot()
+    const py = paths.pythonBin();
+    if (!py)
+      throw new Error(noPythonMessage());
+    execFileSync(py.cmd, [...py.args, paths.scanScript(), paths.dataPath(), "--config", paths.configPath(), "--project-root", paths.projectRoot()], {
+      cwd: paths.projectRoot(),
+      windowsHide: true
     });
+  }
+  var noPythonMessage = () => `no Python 3 interpreter found (tried: ${paths.pythonTried()}). The usage scan needs one; install Python 3 or put it on PATH.`;
+  function pruneEmptyParents(startPath, projectPath) {
+    let dir = path.dirname(startPath);
+    while (isInside(projectPath, dir)) {
+      try {
+        if (fs.readdirSync(dir).length > 0)
+          return;
+        fs.rmdirSync(dir);
+      } catch {
+        return;
+      }
+      dir = path.dirname(dir);
+    }
+  }
+  function isInside(parent, dir) {
+    const rel = path.relative(parent, dir);
+    return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
   }
   function installSkill(g, q, skillName, projectLabel) {
     const r = q.resolveNode(g, skillName);
@@ -34984,13 +35030,21 @@ var require_skill_installer = __commonJS((exports, module) => {
     const destAbs = installPathFor(node, proj.path);
     if (fs.existsSync(destAbs))
       return { error: `already installed at ${destAbs}` };
+    if (!paths.pythonBin())
+      return { error: noPythonMessage() };
     fs.mkdirSync(path.dirname(destAbs), { recursive: true });
     if (node.type === "agent") {
       fs.copyFileSync(srcAbs, destAbs);
     } else {
       fs.cpSync(path.dirname(srcAbs), destAbs, { recursive: true });
     }
-    rescan();
+    try {
+      rescan();
+    } catch (e) {
+      fs.rmSync(destAbs, { recursive: true, force: true });
+      pruneEmptyParents(destAbs, proj.path);
+      return { error: `installed files were removed again: the usage scan failed (${e.message})` };
+    }
     return { ok: true, installed: node.name, type: node.type, project: proj.name, at: destAbs };
   }
   function uninstallSkill(g, q, skillName, projectLabel) {
@@ -35009,10 +35063,15 @@ var require_skill_installer = __commonJS((exports, module) => {
     if (!fs.existsSync(targetAbs))
       return { error: `not installed at ${targetAbs}` };
     fs.rmSync(targetAbs, { recursive: true, force: true });
-    rescan();
+    pruneEmptyParents(targetAbs, proj.path);
+    try {
+      rescan();
+    } catch (e) {
+      return { ok: true, removed: node.name, type: node.type, project: proj.name, from: targetAbs, warning: `removed, but the usage scan failed, so the graph is stale until the next build (${e.message})` };
+    }
     return { ok: true, removed: node.name, type: node.type, project: proj.name, from: targetAbs };
   }
-  module.exports = { installSkill, uninstallSkill, resolveProject, installPathFor };
+  module.exports = { installSkill, uninstallSkill, resolveProject, installPathFor, pruneEmptyParents };
 });
 
 // server/repo-importer.js

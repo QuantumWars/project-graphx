@@ -67,6 +67,20 @@ def source_owning_projects(config_path, project_root):
             cur = parent
     return owners
 
+def as_posix(p):
+    """Exclude patterns are written with forward slashes ("/node_modules/"),
+    which is what a user types and what every config already on disk holds. On
+    Windows os.walk yields backslash paths, so the literal substring test below
+    would match nothing and every configured exclude would silently stop
+    working — the quiet kind of failure, since the scan still succeeds and just
+    reports more projects than asked for.
+
+    Normalising one side is better than asking a config to be written twice.
+    On POSIX os.sep is already "/", so this is a no-op there; it deliberately
+    does not replace a literal backslash, which is a legal character in a POSIX
+    filename."""
+    return p.replace(os.sep, "/")
+
 def find_project_roots(scan_roots, excludes, skip_roots=frozenset()):
     """Returns [(project_root, scan_root)], deduplicated. A project reachable
     from two overlapping scan roots is one project, listed once, attributed to
@@ -81,7 +95,7 @@ def find_project_roots(scan_roots, excludes, skip_roots=frozenset()):
             dirnames[:] = [d for d in dirnames if d != "node_modules"]
             if os.path.basename(dirpath) == ".claude":
                 project_root = os.path.dirname(dirpath)
-                if any(sub in (project_root + "/") for sub in excludes):
+                if any(sub in (as_posix(project_root) + "/") for sub in excludes):
                     continue
                 if os.path.abspath(project_root) in skip_roots:
                     continue

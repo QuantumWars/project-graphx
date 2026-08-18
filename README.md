@@ -32,6 +32,9 @@ Then, in any project you want a graph for:
 `/skill-graph:setup` asks before building rather than just doing it, because a build with
 `scanRoots` set walks every scan root. Say yes and you go straight from nothing to a graph.
 
+Each project gets its own graph. If you would rather have **one catalogue shared by every project**,
+run `/skill-graph:setup-global` instead — see [One graph, or one per project](#one-graph-or-one-per-project).
+
 `/skill-graph:view` needs no download — it serves the viewer from `node`, which the plugin
 already requires. `/skill-graph:app` opens the same viewer as a native desktop window
 instead, at the cost of a one-time ~280 MB Electron install.
@@ -54,6 +57,30 @@ state. WSL works.
 
 The desktop app's packaging script targets **macOS arm64 only**. On other platforms use
 `/skill-graph:view`, or run it unpackaged with `npm start` from `app/`.
+
+## One graph, or one per project
+
+By default the data directory is `<project>/.claude/graph`, so two projects never see each other's
+graphs. That is usually what you want, and it is why nothing follows you between unrelated repos.
+
+`GRAPH_DATA_DIR` overrides it. Set it and every project reads and writes the same directory:
+
+```
+dataDir = GRAPH_DATA_DIR  or  <project>/.claude/graph
+```
+
+`/skill-graph:setup-global` does that end to end — picks the location, finds every source on the
+machine, writes the config with absolute roots, sets the variable in `~/.claude/settings.json`, and
+builds. It takes effect on the next restart, because an MCP server reads its environment at process
+start.
+
+Sharing the directory shares the overlay too, so notes, ratings and tags become machine-wide rather
+than per-repo. If you want the same *skills* everywhere but not the same *notes*, do not set the
+variable — give each project a normal config whose source roots are **absolute**. Relative roots
+resolve against the project; absolute ones do not, so several projects can catalogue the same
+folders and still keep their own graphs.
+
+Per-project graphs are never deleted by going global. Remove the variable and they are live again.
 
 ## Where things live
 

@@ -67,6 +67,14 @@ const noPythonMessage = () =>
 function pruneEmptyParents(startPath, projectPath) {
   let dir = path.dirname(startPath);
   while (isInside(projectPath, dir)) {
+    // Never the .claude directory itself. It is the project's, not ours — we
+    // only ever created directories beneath it — and the usage scanner
+    // identifies a project BY the presence of .claude, so removing it made a
+    // project disappear from the graph entirely (its project node and its
+    // CLAUDE.md node with it) the moment its last catalogued item was
+    // uninstalled. The next uninstall then answered "no scanned project
+    // matches ..." instead of "not installed", which names the wrong problem.
+    if (path.basename(dir) === ".claude") return;
     try {
       if (fs.readdirSync(dir).length > 0) return;
       fs.rmdirSync(dir);

@@ -27,7 +27,13 @@ Usage:
 """
 import json, os, sys
 
-DEFAULT_EXCLUDES = ["/node_modules/"]
+# "/imported-repos/" is here because add_repo clones other people's repositories
+# into the catalogue's own data directory, and those clones carry a .claude/ of
+# their own. Under the default per-project layout the data directory sits at
+# <project>/.claude/graph/, which is inside the default scan root — so every
+# imported repo was being counted as one of YOUR projects, complete with a
+# project node and a CLAUDE.md node.
+DEFAULT_EXCLUDES = ["/node_modules/", "/imported-repos/"]
 
 # Shared with build-graph.py and the MCP server. Install detection and install
 # itself must agree on the directory and the entry file for every kind, or a
@@ -35,17 +41,31 @@ DEFAULT_EXCLUDES = ["/node_modules/"]
 INFRA = {t["kind"]: t for t in json.load(open(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "claude-infra.json")))["types"]}
 
+def own_import_root(config_path):
+    """The catalogue's own imported-repos directory, as an exclude pattern.
+
+    Added unconditionally rather than left to DEFAULT_EXCLUDES, because that
+    default only applies to a config with no "scanExclude" key at all — every
+    config that sets one, which is every config /skill-graph:setup writes,
+    would keep scanning its own clones. These are files the plugin created; it
+    should never need to be configured not to mistake them for the user's work.
+    """
+    if not config_path:
+        return []
+    return [as_posix(os.path.join(os.path.dirname(os.path.abspath(config_path)), "imported-repos")) + "/"]
+
 def load_scan_config(config_path):
+    own = own_import_root(config_path)
     if not config_path or not os.path.isfile(config_path):
-        return [os.path.expanduser("~/code")], DEFAULT_EXCLUDES
+        return [os.path.expanduser("~/code")], DEFAULT_EXCLUDES + own
     with open(config_path) as f:
         raw = json.load(f)
     if isinstance(raw, list):  # original bare-array sources.json format
-        return [os.path.expanduser("~/code")], DEFAULT_EXCLUDES
+        return [os.path.expanduser("~/code")], DEFAULT_EXCLUDES + own
     # An explicitly empty scanRoots means "scan nothing" and is honoured as
     # written; only an absent key falls back to a default.
     roots = raw["scanRoots"] if "scanRoots" in raw else [os.path.expanduser("~/code")]
-    return [os.path.expanduser(r) for r in roots], raw.get("scanExclude", DEFAULT_EXCLUDES)
+    return [os.path.expanduser(r) for r in roots], raw.get("scanExclude", DEFAULT_EXCLUDES) + own
 
 def source_owning_projects(config_path, project_root):
     """Project roots that own a configured source, and so must not be counted

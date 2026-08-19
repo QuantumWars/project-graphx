@@ -35,7 +35,19 @@
   const MIN_DIST_SQ = 900; // floor under repulsion's distSq — denominator can't go below this
   const MAX_SPEED = 140; // world-units/tick hard cap, independent of DAMPING
 
-  const TYPES = ["agent", "skill"];
+  // Derived from the data, not hardcoded. This was ["agent", "skill"], and
+  // passesFilter() gates rendering on activeTypes — so once the build started
+  // cataloguing commands and output styles, those nodes existed in the graph,
+  // were returned by every query, and could never be drawn. Twenty command
+  // nodes were invisible in a graph that reported 592.
+  //
+  // DATA is already loaded above, so the kinds present are knowable here and
+  // cannot drift from claude-infra.json the way a second hardcoded list does.
+  // project/claudemd are excluded because they are not authored kinds: they are
+  // toggled together by the "project" switch, which passesFilter special-cases.
+  const TYPES = [...new Set(DATA.nodes.map((n) => n.type))]
+    .filter((t) => t !== "project" && t !== "claudemd")
+    .sort();
 
   // ---- curated group palette (not hash-generated) ----
   // 38 auto-derived categories is too many distinct colors for any viewer to
@@ -252,7 +264,22 @@
     return { x: Math.cos(angle) * dist, y: Math.sin(angle) * dist };
   }
 
-  const allLayout = computeClusterLayoutSplit(catalogNodes, (n) => n.type === "agent", (n) => n.type === "skill");
+  // The B side is "every catalogued kind that is not an agent", not "skill".
+  //
+  // It was `n.type === "skill"`, and placeSpiral only ever writes positions for
+  // the A list and the B list — so once the build began cataloguing commands
+  // and output styles, those nodes fell through both predicates and got NO
+  // position at all. homePositionFor then returned undefined and the very next
+  // line read `pos.x` off it, so a single command node in the graph threw
+  // during construction of allNodes and the entire viewer failed to render.
+  // Not a degraded view: a blank page, on a graph the MCP tools answered
+  // questions about perfectly well.
+  //
+  // Splitting agents from everything-else keeps the existing two-disk geometry
+  // (and its footprint arithmetic, which now counts these nodes) rather than
+  // inventing a third sub-disk. Kind is still carried on the node and shown in
+  // the inspector; only the seating chart groups them.
+  const allLayout = computeClusterLayoutSplit(catalogNodes, (n) => n.type === "agent", (n) => n.type !== "agent");
   const agentNodesRaw = catalogNodes.filter((n) => n.type === "agent");
   const skillNodesRaw = catalogNodes.filter((n) => n.type === "skill");
   const agentsLayout = computeClusterLayout(agentNodesRaw);
@@ -278,7 +305,12 @@
   function homePositionFor(n, mode) {
     if (n.type === "project") return projectHomePosition(n.id, mode);
     if (n.type === "claudemd") {
-      const base = projectHomePosition(claudemdParentOf.get(n.id), mode);
+      // A claudemd node is anchored to its project through a "doc" edge. If
+      // that edge is absent — a partial or hand-edited graph — the lookup
+      // yields no base, and reading .x off it killed the whole page for the
+      // same reason an unplaced command node did. Same remedy: a real position
+      // rather than a crash.
+      const base = projectHomePosition(claudemdParentOf.get(n.id), mode) || unplacedPosition(n.id);
       const off = claudemdOffset(n.id);
       return { x: base.x + off.x, y: base.y + off.y };
     }
@@ -291,7 +323,21 @@
     // it just needs a real, valid home to sit at while hidden.
     if (mode === "agents" && n.type === "agent") return agentsLayout.positions.get(n.id);
     if (mode === "skills" && n.type === "skill") return skillsLayout.positions.get(n.id);
-    return allLayout.positions.get(n.id);
+    // Never return undefined. A node the layout did not place used to crash the
+    // whole viewer on the next property read — one unplaced node cost the
+    // entire page, which is a wildly disproportionate failure for a seating
+    // problem. A deterministic scatter near the origin keeps such a node
+    // visible and clickable so the gap is reported rather than fatal.
+    return allLayout.positions.get(n.id) || unplacedPosition(n.id);
+  }
+
+  // Same hash-scatter shape as claudemdOffset: stable across reloads, so an
+  // unplaced node does not jump around between sessions.
+  function unplacedPosition(id) {
+    let h = 0;
+    for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+    const angle = ((h >>> 0) % 1000) / 1000 * Math.PI * 2;
+    return { x: Math.cos(angle) * 240, y: Math.sin(angle) * 240 };
   }
 
   const allNodes = DATA.nodes.map((n) => {
@@ -495,7 +541,7 @@
   const projectsAndClaudemdPositions = new Map([
     ...projectsLayout.positions,
     ...claudemdNodesRaw.map((n) => {
-      const base = projectsLayout.positions.get(claudemdParentOf.get(n.id));
+      const base = projectsLayout.positions.get(claudemdParentOf.get(n.id)) || unplacedPosition(n.id);
       const off = claudemdOffset(n.id);
       return [n.id, { x: base.x + off.x, y: base.y + off.y }];
     }),
@@ -733,7 +779,16 @@
     if ((m = q.match(/^projects\s+(.+)$/i))) return { kind: "projects", name: m[1].trim() };
     if ((m = q.match(/^project:\s*(.+)$/i))) return { kind: "projectFilter", label: m[1].trim() };
     if ((m = q.match(/^cat(?:egory)?:\s*(.+)$/i))) return { kind: "category", cat: m[1].trim() };
-    if ((m = q.match(/^type:\s*(agent|skill)s?$/i))) return { kind: "type", type: m[1].toLowerCase() };
+    // Accepts any kind actually present in the graph, singular or plural, so a
+    // kind added to claude-infra.json cannot silently stop being addressable.
+    // The old form hardcoded (agent|skill): "type:command" failed the regex,
+    // fell through to the text branch below, and searched for the literal
+    // string "type:command" — zero matches, no error, no hint.
+    if ((m = q.match(/^type:\s*([a-z][a-z-]*?)s?$/i))) {
+      const t = m[1].toLowerCase();
+      if (TYPES.includes(t)) return { kind: "type", type: t };
+      return { kind: "badType", asked: m[1], known: TYPES };
+    }
     if ((m = q.match(/^find\s+(.+)$/i))) return { kind: "search", text: m[1].trim() };
     return { kind: "search", text: q };
   }
@@ -748,11 +803,33 @@
       const t = frameTextForMode("all");
       frameQueryEl.textContent = t.q; frameResultEl.textContent = t.r;
     } else if (parsed.kind === "search") {
-      const q = parsed.text.toLowerCase();
-      const matched = allNodes.filter((n) => n.name.toLowerCase().includes(q) || (n.description || "").toLowerCase().includes(q) || n.category.toLowerCase().includes(q));
+      // Same per-term rule as graph-query.js find(), for the same reason: a
+      // whole-query substring test cannot express "image generation" against a
+      // node named image-generation.
+      const terms = parsed.text.toLowerCase().split(/\s+/).filter(Boolean);
+      const matched = terms.length
+        ? allNodes.filter((n) => {
+            const hay = `${n.name} ${n.description || ""} ${n.category}`.toLowerCase();
+            return terms.every((t) => hay.includes(t));
+          })
+        : [];
       highlightSet = new Set(matched.map((n) => n.id));
       frameQueryEl.textContent = `find "${parsed.text}"`;
-      frameResultEl.textContent = `${matched.length} matched`;
+      // The highlight set is built from every node; the canvas only draws what
+      // passesFilter() admits. Reporting the match count alone let the frame
+      // say "4 matched" over an empty canvas whenever a type, category or tag
+      // filter excluded them — indistinguishable, from the user's side, from
+      // the node not being in the graph at all.
+      const hidden = matched.filter((n) => !passesFilter(n)).length;
+      frameResultEl.textContent = `${matched.length} matched`
+        + (hidden ? ` · ${hidden} hidden by filters` : "");
+      if (hidden && hidden === matched.length) {
+        queryHint.textContent = `all ${hidden} match${hidden === 1 ? "" : "es"} are hidden by the current filters — clear them to see ${hidden === 1 ? "it" : "them"}`;
+      }
+    } else if (parsed.kind === "badType") {
+      frameQueryEl.textContent = `type: ${parsed.asked}`;
+      frameResultEl.textContent = "no match";
+      queryHint.textContent = `no node kind "${parsed.asked}" in this graph — try: ${parsed.known.join(", ")}`;
     } else if (parsed.kind === "open") {
       const r = resolveNode(parsed.name);
       frameQueryEl.textContent = `open ${parsed.name}`;
@@ -807,7 +884,10 @@
     } else if (parsed.kind === "type") {
       setSoloFilter("type", parsed.type);
       frameQueryEl.textContent = `type: ${parsed.type}`;
-      frameResultEl.textContent = `${viewModeCounts[parsed.type === "agent" ? "agents" : "skills"]} nodes`;
+      // Counted from the graph, not looked up in the two-entry view-mode map —
+      // that map only has "agents" and "skills", so every other kind reported
+      // the skill count.
+      frameResultEl.textContent = `${allNodes.filter((n) => n.type === parsed.type).length} nodes`;
     } else if (parsed.kind === "path") {
       const ra = resolveNode(parsed.a), rb = resolveNode(parsed.b);
       frameQueryEl.textContent = `path ${parsed.a} -> ${parsed.b}`;
@@ -1035,7 +1115,7 @@
       .map((e) => e.to);
     if (!usedIds.length) return null;
     const savedTypes = new Set(activeTypes);
-    activeTypes.add("agent"); activeTypes.add("skill"); // visible even if the current view mode is Projects-only
+    TYPES.forEach((t) => activeTypes.add(t)); // visible even if the current view mode is Projects-only
     const savedHomes = new Map();
     const burstPositions = computeBurstPositions(projectNode.homeX, projectNode.homeY, usedIds);
     usedIds.forEach((id) => {

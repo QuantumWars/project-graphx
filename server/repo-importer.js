@@ -17,6 +17,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const overlay = require("./graph-overlay.js");
 const paths = require("./paths.js");
+const infra = require("./infra-types.js");
 
 function frontmatter(text) {
   if (!text.startsWith("---")) return { fm: {}, body: text };
@@ -103,7 +104,24 @@ function cloneOrLocate(source) {
   }
   const label = slugFromSource(source);
   const dest = path.join(paths.importRoot(), label);
-  if (fs.existsSync(dest)) return { error: `"${label}" already has a local clone at ${dest} — remove_repo first to re-import` };
+  if (fs.existsSync(dest)) {
+    // A clone on disk means one of two things, and they need opposite answers.
+    //
+    // If the overlay still records this label, the repo really is imported and
+    // re-importing would duplicate it — refuse, and the advice to run
+    // remove_repo first is followable.
+    //
+    // If the overlay does NOT record it, the clone is an orphan: remove_repo
+    // ran without deleteClone (its default), which unregistered the label but
+    // left the files. Refusing here used to be a dead end — add_repo said "run
+    // remove_repo first", and remove_repo said "no imported repo labeled ...",
+    // so neither tool could undo the other and only a manual rm escaped it.
+    // Adopting the existing clone re-registers it and costs no network.
+    if (overlay.hasImportedRepo(label)) {
+      return { error: `"${label}" is already imported (clone at ${dest}) — remove_repo first to re-import` };
+    }
+    return { repoPath: dest, label, isLocal: false, adopted: true };
+  }
   fs.mkdirSync(paths.importRoot(), { recursive: true });
   try {
     execFileSync("git", ["clone", "--depth", "1", source, dest], { stdio: "pipe" });
@@ -113,38 +131,49 @@ function cloneOrLocate(source) {
   return { repoPath: dest, label, isLocal: false };
 }
 
+// Driven by the shared claude-infra.json table, not by a branch per kind. The
+// two-branch version this replaces imported agents and skills only, so a repo
+// whose .claude/ held commands or output styles imported as "nothing found" —
+// and, worse, a repo holding ONLY those was reported as having no .claude/ at
+// all and had its clone deleted. Every other part of the pipeline (build,
+// install, the usage scan, push) already reads the table; this was the last
+// place that still hardcoded two of the four kinds.
 function scanRepo(repoPath, label) {
   const nodes = [];
-  const agentsDir = path.join(repoPath, ".claude", "agents");
-  if (fs.existsSync(agentsDir)) {
-    fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md")).forEach((f) => {
-      const p = path.join(agentsDir, f);
-      const { fm } = frontmatter(fs.readFileSync(p, "utf-8"));
-      const name = fm.name || f.replace(/\.md$/, "");
+  for (const kind of infra.kinds()) {
+    const spec = infra.spec(kind);
+    const dir = path.join(repoPath, ".claude", spec.installDir);
+    if (!fs.existsSync(dir)) continue;
+
+    let entries;
+    try { entries = fs.readdirSync(dir); } catch { continue; }
+
+    for (const entry of entries) {
+      // "flat" kinds are one .md file per item; "dir" kinds are a directory
+      // holding a named entry file. The fallback name differs accordingly.
+      let filePath, fallbackName;
+      if (spec.layout === "flat") {
+        if (!entry.endsWith(".md")) continue;
+        filePath = path.join(dir, entry);
+        fallbackName = entry.replace(/\.md$/, "");
+      } else {
+        try { if (!fs.statSync(path.join(dir, entry)).isDirectory()) continue; } catch { continue; }
+        filePath = path.join(dir, entry, spec.entryFile);
+        if (!fs.existsSync(filePath)) continue;
+        fallbackName = entry;
+      }
+
+      const { fm } = frontmatter(fs.readFileSync(filePath, "utf-8"));
+      const name = fm.name || fallbackName;
       const desc = fm.description || "";
-      const toolsRaw = (fm.tools || "").replace(/^\[|\]$/g, "");
-      const tools = toolsRaw.split(/[,\s]+/).filter(Boolean);
+      // Only agents declare a tools list; the others have no such field, so
+      // this parses to an empty array for them rather than needing a branch.
+      const tools = (fm.tools || "").replace(/^\[|\]$/g, "").split(/[,\s]+/).filter(Boolean);
       nodes.push({
-        id: `import:${label}:agent:${name}`, name, type: "agent", repo: `import:${label}`,
-        description: desc, tools, category: categoryFor(name, desc), path: p, sourceRepo: label,
+        id: `import:${label}:${kind}:${name}`, name, type: kind, repo: `import:${label}`,
+        description: desc, tools, category: categoryFor(name, desc), path: filePath, sourceRepo: label,
       });
-    });
-  }
-  const skillsDir = path.join(repoPath, ".claude", "skills");
-  if (fs.existsSync(skillsDir)) {
-    fs.readdirSync(skillsDir).filter((d) => {
-      try { return fs.statSync(path.join(skillsDir, d)).isDirectory(); } catch { return false; }
-    }).forEach((d) => {
-      const p = path.join(skillsDir, d, "SKILL.md");
-      if (!fs.existsSync(p)) return;
-      const { fm } = frontmatter(fs.readFileSync(p, "utf-8"));
-      const name = fm.name || d;
-      const desc = fm.description || "";
-      nodes.push({
-        id: `import:${label}:skill:${name}`, name, type: "skill", repo: `import:${label}`,
-        description: desc, tools: [], category: categoryFor(name, desc), path: p, sourceRepo: label,
-      });
-    });
+    }
   }
   return nodes;
 }
@@ -206,13 +235,17 @@ function addRepo(source) {
   if (located.error) return { error: located.error };
   const nodes = scanRepo(located.repoPath, located.label);
   if (!nodes.length) {
-    if (!located.isLocal) fs.rmSync(located.repoPath, { recursive: true, force: true }); // don't keep a useless clone around
-    return { error: `no .claude/skills or .claude/agents found in ${located.repoPath}` };
+    // An adopted clone was already on disk before this call, so deleting it
+    // here would destroy something this call did not create. Only a clone this
+    // call made is cleaned up.
+    if (!located.isLocal && !located.adopted) fs.rmSync(located.repoPath, { recursive: true, force: true });
+    const looked = infra.kinds().map((k) => `.claude/${infra.spec(k).installDir}`).join(", ");
+    return { error: `nothing importable in ${located.repoPath} — looked for ${looked}` };
   }
 
   const clash = builtFileUnder(located.repoPath);
   if (clash) {
-    if (!located.isLocal) fs.rmSync(located.repoPath, { recursive: true, force: true });
+    if (!located.isLocal && !located.adopted) fs.rmSync(located.repoPath, { recursive: true, force: true });
     return {
       error:
         `${located.repoPath} is already catalogued by the build — ${clash.path} is in the graph already. ` +
@@ -225,10 +258,18 @@ function addRepo(source) {
   const repoResult = overlay.addImportedRepo({ label: located.label, source, repoPath: located.repoPath, isLocal: located.isLocal, nodeCount: nodes.length });
   if (repoResult.error) return repoResult;
   overlay.addImportedNodes(nodes);
+  // One count per kind the table knows, rather than two named fields. Adding a
+  // kind to claude-infra.json used to leave its items importable but invisible
+  // in this summary, which reads as "nothing was found".
+  const found = {};
+  for (const kind of infra.kinds()) {
+    const n = nodes.filter((x) => x.type === kind).length;
+    if (n) found[kind] = n;
+  }
   return {
     ok: true, label: located.label, repoPath: located.repoPath,
-    agentsFound: nodes.filter((n) => n.type === "agent").length,
-    skillsFound: nodes.filter((n) => n.type === "skill").length,
+    adopted: located.adopted || false, // reused a clone left by a previous remove_repo
+    found,
     names: nodes.map((n) => `${n.name} (${n.type})`),
     note: "New nodes start with zero connections — cross-references aren't auto-computed for imports. Use add_custom_edge to link them to related catalog items.",
   };

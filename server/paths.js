@@ -155,10 +155,13 @@ const pythonTried = () => PYTHON_CANDIDATES.map((c) => [c.cmd, ...c.args].join("
 //
 // The bare-array shape is the original sources.json format, still accepted so
 // an existing repo can drop its file in unchanged and have it work.
+// Kept in step with DEFAULT_EXCLUDES in scan-project-usage.py. "/imported-repos/"
+// keeps the catalogue's own clones — other people's repos, each with a .claude/
+// of its own — from being counted as the user's projects.
 const DEFAULT_CONFIG = {
   sources: [],
   scanRoots: [],
-  scanExclude: ["/node_modules/"],
+  scanExclude: ["/node_modules/", "/imported-repos/"],
 };
 
 function loadConfig() {

@@ -34377,7 +34377,7 @@ var require_paths = __commonJS((exports, module) => {
   var DEFAULT_CONFIG = {
     sources: [],
     scanRoots: [],
-    scanExclude: ["/node_modules/"]
+    scanExclude: ["/node_modules/", "/imported-repos/"]
   };
   function loadConfig() {
     const p = configPath();
@@ -34428,6 +34428,11 @@ var require_graph_overlay = __commonJS((exports, module) => {
   var path = __require("path");
   var paths = require_paths();
   var EMPTY_OVERLAY = { notes: {}, customEdges: [], ratings: {}, importedRepos: [], importedNodes: [], categoryOverrides: {}, tags: {} };
+  function today() {
+    const d = new Date;
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
   function loadOverlay() {
     const OVERLAY_PATH = paths.overlayPath();
     if (!fs.existsSync(OVERLAY_PATH))
@@ -34476,7 +34481,7 @@ var require_graph_overlay = __commonJS((exports, module) => {
     const overlay = loadOverlay();
     if (!overlay.notes[nodeId])
       overlay.notes[nodeId] = [];
-    const note = { text, at: new Date().toISOString().slice(0, 10) };
+    const note = { text, at: today() };
     overlay.notes[nodeId].push(note);
     saveOverlay(overlay);
     return { nodeId, index: overlay.notes[nodeId].length - 1, note };
@@ -34499,7 +34504,7 @@ var require_graph_overlay = __commonJS((exports, module) => {
     const overlay = loadOverlay();
     if (!overlay.ratings[nodeId])
       overlay.ratings[nodeId] = [];
-    const entry = { rating: r, note: note || "", at: new Date().toISOString().slice(0, 10) };
+    const entry = { rating: r, note: note || "", at: today() };
     overlay.ratings[nodeId].push(entry);
     saveOverlay(overlay);
     const all = overlay.ratings[nodeId];
@@ -34557,9 +34562,12 @@ var require_graph_overlay = __commonJS((exports, module) => {
     if (overlay.importedRepos.some((r) => r.label === repoMeta.label)) {
       return { error: `"${repoMeta.label}" is already imported — remove it first to re-import` };
     }
-    overlay.importedRepos.push({ ...repoMeta, at: new Date().toISOString().slice(0, 10) });
+    overlay.importedRepos.push({ ...repoMeta, at: today() });
     saveOverlay(overlay);
     return { ok: true };
+  }
+  function hasImportedRepo(label) {
+    return loadOverlay().importedRepos.some((r) => r.label === label);
   }
   function addImportedNodes(nodes) {
     const overlay = loadOverlay();
@@ -34581,7 +34589,7 @@ var require_graph_overlay = __commonJS((exports, module) => {
   }
   function addCustomEdge(from, to, label, weight) {
     const overlay = loadOverlay();
-    const edge = { from, to, label: label || "related", weight: weight || 1, at: new Date().toISOString().slice(0, 10) };
+    const edge = { from, to, label: label || "related", weight: weight || 1, at: today() };
     overlay.customEdges.push(edge);
     saveOverlay(overlay);
     return { index: overlay.customEdges.length - 1, edge };
@@ -34608,6 +34616,7 @@ var require_graph_overlay = __commonJS((exports, module) => {
     addImportedRepo,
     addImportedNodes,
     removeImportedRepo,
+    hasImportedRepo,
     setCategory,
     removeCategoryOverride,
     addTags,
@@ -34774,8 +34783,15 @@ var require_graph_query = __commonJS((exports, module) => {
     };
   }
   function find(g, text) {
-    const q = text.toLowerCase();
-    const matched = g.data.nodes.filter((n) => n.type !== "project" && n.type !== "claudemd" && (n.name.toLowerCase().includes(q) || (n.description || "").toLowerCase().includes(q) || n.category.toLowerCase().includes(q)));
+    const terms = text.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length)
+      return { matched: [] };
+    const matched = g.data.nodes.filter((n) => {
+      if (n.type === "project" || n.type === "claudemd")
+        return false;
+      const hay = `${n.name} ${n.description || ""} ${n.category}`.toLowerCase();
+      return terms.every((t) => hay.includes(t));
+    });
     return { matched: matched.map(nodeSummary) };
   }
   function getNodeDetail(g, name) {
@@ -35019,6 +35035,8 @@ var require_skill_installer = __commonJS((exports, module) => {
   function pruneEmptyParents(startPath, projectPath) {
     let dir = path.dirname(startPath);
     while (isInside(projectPath, dir)) {
+      if (path.basename(dir) === ".claude")
+        return;
       try {
         if (fs.readdirSync(dir).length > 0)
           return;
@@ -35106,6 +35124,7 @@ var require_repo_importer = __commonJS((exports, module) => {
   var { execFileSync } = __require("child_process");
   var overlay = require_graph_overlay();
   var paths = require_paths();
+  var infra = require_infra_types();
   function frontmatter(text) {
     if (!text.startsWith("---"))
       return { fm: {}, body: text };
@@ -35193,8 +35212,12 @@ var require_repo_importer = __commonJS((exports, module) => {
     }
     const label = slugFromSource(source);
     const dest = path.join(paths.importRoot(), label);
-    if (fs.existsSync(dest))
-      return { error: `"${label}" already has a local clone at ${dest} — remove_repo first to re-import` };
+    if (fs.existsSync(dest)) {
+      if (overlay.hasImportedRepo(label)) {
+        return { error: `"${label}" is already imported (clone at ${dest}) — remove_repo first to re-import` };
+      }
+      return { repoPath: dest, label, isLocal: false, adopted: true };
+    }
     fs.mkdirSync(paths.importRoot(), { recursive: true });
     try {
       execFileSync("git", ["clone", "--depth", "1", source, dest], { stdio: "pipe" });
@@ -35205,55 +35228,52 @@ var require_repo_importer = __commonJS((exports, module) => {
   }
   function scanRepo(repoPath, label) {
     const nodes = [];
-    const agentsDir = path.join(repoPath, ".claude", "agents");
-    if (fs.existsSync(agentsDir)) {
-      fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md")).forEach((f) => {
-        const p = path.join(agentsDir, f);
-        const { fm } = frontmatter(fs.readFileSync(p, "utf-8"));
-        const name = fm.name || f.replace(/\.md$/, "");
+    for (const kind of infra.kinds()) {
+      const spec = infra.spec(kind);
+      const dir = path.join(repoPath, ".claude", spec.installDir);
+      if (!fs.existsSync(dir))
+        continue;
+      let entries;
+      try {
+        entries = fs.readdirSync(dir);
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        let filePath, fallbackName;
+        if (spec.layout === "flat") {
+          if (!entry.endsWith(".md"))
+            continue;
+          filePath = path.join(dir, entry);
+          fallbackName = entry.replace(/\.md$/, "");
+        } else {
+          try {
+            if (!fs.statSync(path.join(dir, entry)).isDirectory())
+              continue;
+          } catch {
+            continue;
+          }
+          filePath = path.join(dir, entry, spec.entryFile);
+          if (!fs.existsSync(filePath))
+            continue;
+          fallbackName = entry;
+        }
+        const { fm } = frontmatter(fs.readFileSync(filePath, "utf-8"));
+        const name = fm.name || fallbackName;
         const desc = fm.description || "";
-        const toolsRaw = (fm.tools || "").replace(/^\[|\]$/g, "");
-        const tools = toolsRaw.split(/[,\s]+/).filter(Boolean);
+        const tools = (fm.tools || "").replace(/^\[|\]$/g, "").split(/[,\s]+/).filter(Boolean);
         nodes.push({
-          id: `import:${label}:agent:${name}`,
+          id: `import:${label}:${kind}:${name}`,
           name,
-          type: "agent",
+          type: kind,
           repo: `import:${label}`,
           description: desc,
           tools,
           category: categoryFor(name, desc),
-          path: p,
+          path: filePath,
           sourceRepo: label
         });
-      });
-    }
-    const skillsDir = path.join(repoPath, ".claude", "skills");
-    if (fs.existsSync(skillsDir)) {
-      fs.readdirSync(skillsDir).filter((d) => {
-        try {
-          return fs.statSync(path.join(skillsDir, d)).isDirectory();
-        } catch {
-          return false;
-        }
-      }).forEach((d) => {
-        const p = path.join(skillsDir, d, "SKILL.md");
-        if (!fs.existsSync(p))
-          return;
-        const { fm } = frontmatter(fs.readFileSync(p, "utf-8"));
-        const name = fm.name || d;
-        const desc = fm.description || "";
-        nodes.push({
-          id: `import:${label}:skill:${name}`,
-          name,
-          type: "skill",
-          repo: `import:${label}`,
-          description: desc,
-          tools: [],
-          category: categoryFor(name, desc),
-          path: p,
-          sourceRepo: label
-        });
-      });
+      }
     }
     return nodes;
   }
@@ -35284,13 +35304,14 @@ var require_repo_importer = __commonJS((exports, module) => {
       return { error: located.error };
     const nodes = scanRepo(located.repoPath, located.label);
     if (!nodes.length) {
-      if (!located.isLocal)
+      if (!located.isLocal && !located.adopted)
         fs.rmSync(located.repoPath, { recursive: true, force: true });
-      return { error: `no .claude/skills or .claude/agents found in ${located.repoPath}` };
+      const looked = infra.kinds().map((k) => `.claude/${infra.spec(k).installDir}`).join(", ");
+      return { error: `nothing importable in ${located.repoPath} — looked for ${looked}` };
     }
     const clash = builtFileUnder(located.repoPath);
     if (clash) {
-      if (!located.isLocal)
+      if (!located.isLocal && !located.adopted)
         fs.rmSync(located.repoPath, { recursive: true, force: true });
       return {
         error: `${located.repoPath} is already catalogued by the build — ${clash.path} is in the graph already. ` + `Importing it would add a second copy of every item under it, and because both copies carry the same name, ` + `every by-name lookup of them would answer "ambiguous" with two identical choices. Nothing was imported.`,
@@ -35302,12 +35323,18 @@ var require_repo_importer = __commonJS((exports, module) => {
     if (repoResult.error)
       return repoResult;
     overlay.addImportedNodes(nodes);
+    const found = {};
+    for (const kind of infra.kinds()) {
+      const n = nodes.filter((x) => x.type === kind).length;
+      if (n)
+        found[kind] = n;
+    }
     return {
       ok: true,
       label: located.label,
       repoPath: located.repoPath,
-      agentsFound: nodes.filter((n) => n.type === "agent").length,
-      skillsFound: nodes.filter((n) => n.type === "skill").length,
+      adopted: located.adopted || false,
+      found,
       names: nodes.map((n) => `${n.name} (${n.type})`),
       note: "New nodes start with zero connections — cross-references aren't auto-computed for imports. Use add_custom_edge to link them to related catalog items."
     };
@@ -35335,7 +35362,7 @@ var require_server3 = __commonJS(() => {
   var installer = require_skill_installer();
   var repoImporter = require_repo_importer();
   var INFRA_KINDS = require_infra_types().kinds();
-  var server = new McpServer({ name: "skill-graph", version: "0.1.2" });
+  var server = new McpServer({ name: "skill-graph", version: "0.1.3" });
   function ok(obj) {
     return { content: [{ type: "text", text: JSON.stringify(obj, null, 2) }] };
   }
@@ -35371,7 +35398,7 @@ var require_server3 = __commonJS(() => {
   }, async ({ a, b }) => ok(q.findPath(q.loadGraph(), a, b)));
   server.registerTool("projects_using", {
     title: "Which real projects use this skill/agent",
-    description: "Backed by an actual filesystem scan of every .claude/agents and .claude/skills folder under the configured scan roots — not a manifest that can drift. Returns which of your projects currently have this installed.",
+    description: "Backed by an actual filesystem scan of every .claude/ install directory under the configured scan roots — not a manifest that can drift. Returns which of your projects currently have this installed.",
     inputSchema: { name: z.string().describe(NODE_REF) }
   }, async ({ name }) => ok(q.projectsUsing(q.loadGraph(), name)));
   server.registerTool("project_installed_skills", {
@@ -35498,7 +35525,7 @@ var require_server3 = __commonJS(() => {
   });
   server.registerTool("add_repo", {
     title: "Add skills/agents from any external repo",
-    description: "Extracts every .claude/skills/*/SKILL.md and .claude/agents/*.md from any repo (GitHub URL — clones it shallowly into .claude/graph/imported-repos/ — or a local path) into this catalog. Extraction is frontmatter-only (name/description/tools), the same parser the build pipeline uses. New nodes start with ZERO real connections — cross-references are not auto-computed for imports, unlike configured sources which get a full body-text scan. Use add_custom_edge afterward to link an import to related catalog items you notice. Stored in the durable overlay, so /skill-graph:build never removes it — only remove_repo does. Fails cleanly if the repo has no .claude/skills or .claude/agents at all.",
+    description: "Extracts every skill, agent, command and output style from any repo's .claude/ (GitHub URL — clones it shallowly into .claude/graph/imported-repos/ — or a local path) into this catalog, using the same claude-infra.json table the build and install paths use. Extraction is frontmatter-only (name/description/tools), the same parser the build pipeline uses. New nodes start with ZERO real connections — cross-references are not auto-computed for imports, unlike configured sources which get a full body-text scan. Use add_custom_edge afterward to link an import to related catalog items you notice. Stored in the durable overlay, so /skill-graph:build never removes it — only remove_repo does. Re-adding a URL whose clone is still on disk from a remove_repo that left it there re-registers that clone instead of failing. Fails cleanly if the repo has none of those directories.",
     inputSchema: {
       source: z.string().describe("a GitHub URL (https://... or git@...) or a local filesystem path")
     }

@@ -168,11 +168,29 @@ function projectDetailFor(g, proj) {
   };
 }
 
+// Every term must appear somewhere in name + description + category; the terms
+// need not all land in the same field.
+//
+// This used to test the whole query as one contiguous substring against each
+// field in turn, which made the tool useless for the way people actually search
+// it. "image generation" matched nothing in a 592-node catalogue holding a skill
+// called image-generation, because the hyphen breaks the phrase and no
+// description carries those two words adjacent. The failure reads as a missing
+// node rather than a search that cannot express the question — the description
+// still promised name/description/category search, and it was doing all three,
+// just only ever for one unbroken string.
+//
+// AND rather than OR across terms: "image generation" must not return every
+// node mentioning "image". search_ranked already scores per-term; this is the
+// unranked filter catching up to it.
 function find(g, text) {
-  const q = text.toLowerCase();
-  const matched = g.data.nodes.filter(
-    (n) => n.type !== "project" && n.type !== "claudemd" && (n.name.toLowerCase().includes(q) || (n.description || "").toLowerCase().includes(q) || n.category.toLowerCase().includes(q))
-  );
+  const terms = text.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return { matched: [] };
+  const matched = g.data.nodes.filter((n) => {
+    if (n.type === "project" || n.type === "claudemd") return false;
+    const hay = `${n.name} ${n.description || ""} ${n.category}`.toLowerCase();
+    return terms.every((t) => hay.includes(t));
+  });
   return { matched: matched.map(nodeSummary) };
 }
 

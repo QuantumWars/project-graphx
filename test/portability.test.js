@@ -77,7 +77,7 @@ test("with no interpreter, install reports the missing dependency and leaves no 
 
 // --- the prune never escapes the project -----------------------------------
 
-test("pruning stops at the project root and never removes it", () => {
+test("pruning stops at .claude, and never touches the project root", () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sg-prune-")));
   const project = join(dir, "proj");
   const deep = join(project, ".claude", "skills", "gone");
@@ -86,8 +86,16 @@ test("pruning stops at the project root and never removes it", () => {
 
   installer.pruneEmptyParents(deep, project);
 
+  // The install directory is ours: we created it, so we clear it.
   expect(existsSync(join(project, ".claude", "skills"))).toBe(false);
-  expect(existsSync(join(project, ".claude"))).toBe(false);
+  // .claude is not. This assertion was the opposite until the end-to-end run
+  // showed what removing it costs: the usage scanner identifies a project BY
+  // its .claude directory, so pruning it made the project disappear from the
+  // graph — project node and CLAUDE.md node both — the moment its last
+  // catalogued item was uninstalled, and the next call then reported "no
+  // scanned project matches ..." instead of "not installed". A .claude that
+  // predates the install is also simply not ours to delete.
+  expect(existsSync(join(project, ".claude"))).toBe(true);
   // An empty project root is still the caller's directory, not ours to delete,
   // and neither is anything above it.
   expect(existsSync(project)).toBe(true);

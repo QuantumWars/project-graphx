@@ -22,6 +22,17 @@ const paths = require("./paths.js");
 
 const EMPTY_OVERLAY = { notes: {}, customEdges: [], ratings: {}, importedRepos: [], importedNodes: [], categoryOverrides: {}, tags: {} };
 
+// The calendar date where the person is, not where UTC is. `toISOString` is UTC,
+// so east of Greenwich every evening write is stamped with yesterday — a note
+// added at 00:50 in IST reads as the previous day, which makes the ordering of
+// a day's notes wrong and looks like a bug in the tool rather than in the clock.
+// Only the date is stored, so this is formatted from the local fields directly.
+function today() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 function loadOverlay() {
   const OVERLAY_PATH = paths.overlayPath();
   if (!fs.existsSync(OVERLAY_PATH)) return { ...EMPTY_OVERLAY };
@@ -74,7 +85,7 @@ function applyOverlay(data) {
 function addNote(nodeId, text) {
   const overlay = loadOverlay();
   if (!overlay.notes[nodeId]) overlay.notes[nodeId] = [];
-  const note = { text, at: new Date().toISOString().slice(0, 10) };
+  const note = { text, at: today() };
   overlay.notes[nodeId].push(note);
   saveOverlay(overlay);
   return { nodeId, index: overlay.notes[nodeId].length - 1, note };
@@ -95,7 +106,7 @@ function addRating(nodeId, rating, note) {
   if (r < 1 || r > 5) return { error: `rating must be 1-5, got ${rating}` };
   const overlay = loadOverlay();
   if (!overlay.ratings[nodeId]) overlay.ratings[nodeId] = [];
-  const entry = { rating: r, note: note || "", at: new Date().toISOString().slice(0, 10) };
+  const entry = { rating: r, note: note || "", at: today() };
   overlay.ratings[nodeId].push(entry);
   saveOverlay(overlay);
   const all = overlay.ratings[nodeId];
@@ -165,9 +176,16 @@ function addImportedRepo(repoMeta) {
   if (overlay.importedRepos.some((r) => r.label === repoMeta.label)) {
     return { error: `"${repoMeta.label}" is already imported — remove it first to re-import` };
   }
-  overlay.importedRepos.push({ ...repoMeta, at: new Date().toISOString().slice(0, 10) });
+  overlay.importedRepos.push({ ...repoMeta, at: today() });
   saveOverlay(overlay);
   return { ok: true };
+}
+
+// Whether a label is currently registered. Distinguishes "imported" from
+// "a clone left on disk by a remove_repo that did not delete it", which look
+// identical on the filesystem and need opposite answers from add_repo.
+function hasImportedRepo(label) {
+  return loadOverlay().importedRepos.some((r) => r.label === label);
 }
 
 function addImportedNodes(nodes) {
@@ -193,7 +211,7 @@ function removeImportedRepo(label) {
 
 function addCustomEdge(from, to, label, weight) {
   const overlay = loadOverlay();
-  const edge = { from, to, label: label || "related", weight: weight || 1, at: new Date().toISOString().slice(0, 10) };
+  const edge = { from, to, label: label || "related", weight: weight || 1, at: today() };
   overlay.customEdges.push(edge);
   saveOverlay(overlay);
   return { index: overlay.customEdges.length - 1, edge };
@@ -210,6 +228,6 @@ function removeCustomEdge(index) {
 module.exports = {
   overlayPath: paths.overlayPath, loadOverlay, saveOverlay, applyOverlay,
   addNote, removeNote, addRating, removeRating, addCustomEdge, removeCustomEdge,
-  addImportedRepo, addImportedNodes, removeImportedRepo,
+  addImportedRepo, addImportedNodes, removeImportedRepo, hasImportedRepo,
   setCategory, removeCategoryOverride, addTags, removeTags,
 };

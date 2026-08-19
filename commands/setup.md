@@ -26,7 +26,7 @@ Each source becomes one entry:
 
 `scanRoots` are the trees searched for **projects that have installed** these skills — that is what fills in "who actually uses this". Each is a directory holding many repos, e.g. `~/code`. Ask the user which to use rather than guessing; `[]` is a legitimate answer meaning "catalogue only, do not scan".
 
-`scanExclude` drops paths whose text contains any listed substring. Always keep `/node_modules/`. Add the source trees themselves if they are study material rather than projects — otherwise the catalogue counts itself as a user of everything in it.
+`scanExclude` drops paths whose text contains any listed substring. Always keep `/node_modules/` and `/imported-repos/` — the second keeps the catalogue's own `add_repo` clones, which carry a `.claude/` of their own, from being counted as your projects. Add the source trees themselves if they are study material rather than projects — otherwise the catalogue counts itself as a user of everything in it.
 
 ## 3. Write it
 
@@ -34,7 +34,7 @@ Each source becomes one entry:
 {
   "sources": [ ... ],
   "scanRoots": ["~/code"],
-  "scanExclude": ["/node_modules/"]
+  "scanExclude": ["/node_modules/", "/imported-repos/"]
 }
 ```
 

@@ -19,7 +19,7 @@ const repoImporter = require("./repo-importer.js");
 // kind added to claude-infra.json is filterable the same day it is catalogued.
 const INFRA_KINDS = require("./infra-types.js").kinds();
 
-const server = new McpServer({ name: "skill-graph", version: "0.1.2" });
+const server = new McpServer({ name: "skill-graph", version: "0.1.3" });
 
 function ok(obj) {
   return { content: [{ type: "text", text: JSON.stringify(obj, null, 2) }] };
@@ -94,7 +94,7 @@ server.registerTool(
   {
     title: "Which real projects use this skill/agent",
     description:
-      "Backed by an actual filesystem scan of every .claude/agents and .claude/skills folder under the configured scan roots — not a manifest that can drift. Returns which of your projects currently have this installed.",
+      "Backed by an actual filesystem scan of every .claude/ install directory under the configured scan roots — not a manifest that can drift. Returns which of your projects currently have this installed.",
     inputSchema: { name: z.string().describe(NODE_REF) },
   },
   async ({ name }) => ok(q.projectsUsing(q.loadGraph(), name))
@@ -279,7 +279,7 @@ server.registerTool(
   {
     title: "Add skills/agents from any external repo",
     description:
-      "Extracts every .claude/skills/*/SKILL.md and .claude/agents/*.md from any repo (GitHub URL — clones it shallowly into .claude/graph/imported-repos/ — or a local path) into this catalog. Extraction is frontmatter-only (name/description/tools), the same parser the build pipeline uses. New nodes start with ZERO real connections — cross-references are not auto-computed for imports, unlike configured sources which get a full body-text scan. Use add_custom_edge afterward to link an import to related catalog items you notice. Stored in the durable overlay, so /skill-graph:build never removes it — only remove_repo does. Fails cleanly if the repo has no .claude/skills or .claude/agents at all.",
+      "Extracts every skill, agent, command and output style from any repo's .claude/ (GitHub URL — clones it shallowly into .claude/graph/imported-repos/ — or a local path) into this catalog, using the same claude-infra.json table the build and install paths use. Extraction is frontmatter-only (name/description/tools), the same parser the build pipeline uses. New nodes start with ZERO real connections — cross-references are not auto-computed for imports, unlike configured sources which get a full body-text scan. Use add_custom_edge afterward to link an import to related catalog items you notice. Stored in the durable overlay, so /skill-graph:build never removes it — only remove_repo does. Re-adding a URL whose clone is still on disk from a remove_repo that left it there re-registers that clone instead of failing. Fails cleanly if the repo has none of those directories.",
     inputSchema: {
       source: z.string().describe("a GitHub URL (https://... or git@...) or a local filesystem path"),
     },

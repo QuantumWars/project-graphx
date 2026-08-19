@@ -69,7 +69,7 @@ broken build. Tell them the number will be small and why, rather than letting th
     { "repo": "<label>", "root": "/absolute/path/to/.claude/skills", "kind": "skill" }
   ],
   "scanRoots": ["~/code"],
-  "scanExclude": ["/node_modules/"]
+  "scanExclude": ["/node_modules/", "/imported-repos/"]
 }
 ```
 
